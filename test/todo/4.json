@@ -3,25 +3,34 @@
   "todo": 4,
   "role": "orca",
   "title": "Define manifest v2 and generic agentBackends DTOs",
-  "status": "frozen-record",
+  "status": "live",
   "happy": {
     "assertionId": "T04-HAPPY",
     "action": {
-      "kind": "deferred",
+      "kind": "agent-backend-manifest",
       "subject": "task-4"
     },
     "checks": [
-      "owned_by_later_task"
+      "owned_paths",
+      "v1_content",
+      "canonical_roundtrip",
+      "resolve_argv"
     ]
   },
   "failure": {
     "assertionId": "T04-FAILURE-GUARDS",
     "fixtures": [
-      {
-        "id": "deferred",
-        "expect": "product_validation_deferred"
-      }
+      { "id": "duplicate_backend_ids", "expect": "typed_refusal" },
+      { "id": "duplicate_targets", "expect": "typed_refusal" },
+      { "id": "path_traversal", "expect": "typed_refusal" },
+      { "id": "relative_executable", "expect": "typed_refusal" },
+      { "id": "bad_placeholder", "expect": "typed_refusal" },
+      { "id": "bad_range", "expect": "typed_refusal" },
+      { "id": "unknown_schema_major", "expect": "typed_refusal" },
+      { "id": "missing_lifecycle_route", "expect": "typed_refusal" },
+      { "id": "shell_text", "expect": "typed_refusal" },
+      { "id": "missing_manifest_version", "expect": "typed_refusal" }
     ]
   },
-  "note": "Product implementation is Task 4. This record is frozen by Task 2."
+  "note": "Live Task 4 QA: manifest v2 + generic agentBackends parse/resolve."
 }

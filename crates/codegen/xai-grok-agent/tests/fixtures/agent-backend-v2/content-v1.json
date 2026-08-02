@@ -1,0 +1,9 @@
+{
+  "name": "deployment-tools",
+  "version": "1.0.0",
+  "description": "Content-only v1 plugin without native backends",
+  "license": "MIT",
+  "skills": "./skills/",
+  "agents": "./agents/",
+  "hooks": "./hooks/hooks.json"
+}

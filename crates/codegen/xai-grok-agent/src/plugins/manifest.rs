@@ -14,7 +14,11 @@
 
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+
+use super::agent_backend::{
+    self, AgentBackendError, AgentBackendV1, MANIFEST_VERSION_V2, validate_backends,
+};
 
 /// Maximum length of a plugin name (kebab-case identifier).
 const MAX_PLUGIN_NAME_LEN: usize = 64;
@@ -31,7 +35,7 @@ fn is_valid_plugin_name(name: &str) -> bool {
 }
 
 /// Author metadata from a plugin manifest.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Author {
     #[serde(default)]
     pub name: Option<String>,
@@ -42,7 +46,7 @@ pub struct Author {
 }
 
 /// A path reference that can be either a single path or multiple paths.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum PathOrPaths {
     Single(String),
@@ -122,7 +126,7 @@ fn resolve_component_path(
 }
 
 /// A value that can be either a file path (string) or an inline JSON object.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum PathOrInline {
     Path(String),
@@ -133,7 +137,10 @@ pub enum PathOrInline {
 ///
 /// Forward-compatible: unknown fields are silently ignored via
 /// `#[serde(deny_unknown_fields)]` NOT being set.
-#[derive(Debug, Clone, Deserialize)]
+///
+/// v1 content plugins omit `manifestVersion` / `agentBackends`.
+/// Native backends require `manifestVersion: 2` and typed `agentBackends`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PluginManifest {
     /// User-facing plugin namespace (kebab-case).  Required.
@@ -154,6 +161,14 @@ pub struct PluginManifest {
     #[serde(default)]
     pub keywords: Vec<String>,
 
+    /// Manifest schema major. Required `2` when `agentBackends` is non-empty.
+    #[serde(default)]
+    pub manifest_version: Option<u32>,
+
+    /// Generic native ACP agent backends (manifest v2).
+    #[serde(default)]
+    pub agent_backends: Vec<AgentBackendV1>,
+
     // ── Component path overrides (supplement convention dirs) ──────
     #[serde(default)]
     pub skills: Option<PathOrPaths>,
@@ -170,7 +185,7 @@ pub struct PluginManifest {
 }
 
 impl PluginManifest {
-    /// Validate the parsed manifest.
+    /// Validate the parsed manifest (name + optional agentBackends).
     pub fn validate(&self) -> Result<(), ManifestError> {
         if !is_valid_plugin_name(&self.name) {
             return Err(ManifestError::InvalidName {
@@ -181,7 +196,51 @@ impl PluginManifest {
                 ),
             });
         }
+        self.validate_agent_backends()?;
         Ok(())
+    }
+
+    /// Validate `manifestVersion` + `agentBackends` contract.
+    pub fn validate_agent_backends(&self) -> Result<(), ManifestError> {
+        if self.agent_backends.is_empty() {
+            if let Some(v) = self.manifest_version {
+                if v != MANIFEST_VERSION_V2 && v != 1 {
+                    return Err(ManifestError::AgentBackend(
+                        AgentBackendError::UnsupportedManifestVersion(v),
+                    ));
+                }
+            }
+            return Ok(());
+        }
+        match self.manifest_version {
+            Some(MANIFEST_VERSION_V2) => {}
+            Some(v) => {
+                return Err(ManifestError::AgentBackend(
+                    AgentBackendError::UnsupportedManifestVersion(v),
+                ));
+            }
+            None => {
+                return Err(ManifestError::AgentBackend(
+                    AgentBackendError::ManifestVersionRequired,
+                ));
+            }
+        }
+        if let Some(ver) = &self.version {
+            ver.parse::<semver::Version>().map_err(|_| {
+                ManifestError::AgentBackend(AgentBackendError::InvalidSemVer(ver.clone()))
+            })?;
+        } else {
+            return Err(ManifestError::AgentBackend(AgentBackendError::InvalidSemVer(
+                String::new(),
+            )));
+        }
+        validate_backends(&self.agent_backends).map_err(ManifestError::AgentBackend)?;
+        Ok(())
+    }
+
+    /// True when this manifest declares one or more native agent backends.
+    pub fn has_agent_backends(&self) -> bool {
+        !self.agent_backends.is_empty()
     }
 
     pub fn skill_dirs(&self, plugin_root: &Path) -> Vec<PathBuf> {
@@ -266,6 +325,38 @@ impl PluginManifest {
             );
         }
     }
+}
+
+/// Parse JSON text into a validated [`PluginManifest`].
+pub fn parse_manifest_json(raw: &str) -> Result<PluginManifest, ManifestError> {
+    let value: serde_json::Value =
+        serde_json::from_str(raw).map_err(|e| ManifestError::ParseError {
+            path: PathBuf::from("<memory>"),
+            message: e.to_string(),
+        })?;
+    if let Some(backends) = value.get("agentBackends").and_then(|b| b.as_array()) {
+        for b in backends {
+            if let Some(targets) = b.get("targets").and_then(|t| t.as_array()) {
+                for t in targets {
+                    if let Some(argv) = t.pointer("/entrypoint/argv") {
+                        if argv.is_string() {
+                            return Err(ManifestError::AgentBackend(AgentBackendError::ShellText(
+                                argv.as_str().unwrap_or("").into(),
+                            )));
+                        }
+                    }
+                }
+            }
+            agent_backend::parse_agent_backend(b).map_err(ManifestError::AgentBackend)?;
+        }
+    }
+    let manifest: PluginManifest =
+        serde_json::from_value(value).map_err(|e| ManifestError::ParseError {
+            path: PathBuf::from("<memory>"),
+            message: e.to_string(),
+        })?;
+    manifest.validate()?;
+    Ok(manifest)
 }
 
 /// Resolve directories from a manifest field or fall back to a default subdirectory.
@@ -390,6 +481,9 @@ pub enum ManifestError {
 
     #[error("failed to parse {path}: {message}")]
     ParseError { path: PathBuf, message: String },
+
+    #[error(transparent)]
+    AgentBackend(#[from] AgentBackendError),
 }
 
 #[cfg(test)]

@@ -1,0 +1,256 @@
+{
+  "manifestVersion": 2,
+  "name": "go-orca",
+  "version": "1.2.0",
+  "description": "Durable Go orchestration backend for Orca",
+  "license": "Apache-2.0",
+  "agentBackends": [
+    {
+      "schemaVersion": 1,
+      "id": "go-orca",
+      "displayName": "Go-Orca",
+      "requires": {
+        "orca": ">=0.4.0 <0.6.0",
+        "acp": ">=1 <2"
+      },
+      "extensions": [
+        {
+          "namespace": "_go-orca.dev",
+          "version": "1",
+          "features": [
+            "events",
+            "snapshot",
+            "agent-graph",
+            "task-graph",
+            "completion-audit",
+            "team-mailbox",
+            "runtime-status"
+          ],
+          "schemaPath": "schemas/orca-acp-extension/v1",
+          "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        }
+      ],
+      "capabilities": [
+        "background-work",
+        "tools",
+        "providers",
+        "teams",
+        "lsp",
+        "mcp"
+      ],
+      "permissions": [
+        { "id": "native-code", "required": true },
+        { "id": "private-daemon", "required": true },
+        { "id": "workspace-access", "required": true },
+        { "id": "network-egress", "required": false }
+      ],
+      "daemon": {
+        "mode": "sharedPerVersion",
+        "backgroundWork": "survivesClientExit",
+        "storeSchemaMajor": 1,
+        "controlProtocolMajor": 1,
+        "supervisor": {
+          "argv": [
+            "{bridge}",
+            "daemon",
+            "supervise",
+            "--daemon",
+            "{daemon}",
+            "--plugin-data",
+            "{pluginData}",
+            "--runtime-dir",
+            "{runtimeDir}",
+            "--cohort",
+            "{cohortId}",
+            "--purge-barrier",
+            "{purgeBarrier}",
+            "--barrier-parent-identity",
+            "{purgeBarrierParentIdentity}",
+            "--barrier-revision",
+            "{purgeBarrierRevision}"
+          ],
+          "cwd": "{pluginRoot}",
+          "detachFromBridge": true
+        }
+      },
+      "targets": [
+        {
+          "os": "darwin",
+          "arch": "aarch64",
+          "artifact": {
+            "url": "https://example.invalid/go-orca-1.2.0-darwin-aarch64.tar.gz",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "signature": {
+              "kind": "sigstore",
+              "identity": "https://github.com/example/go-orca/.github/workflows/release.yml@refs/tags/v1.2.0"
+            },
+            "provenance": {
+              "path": "provenance.intoto.jsonl",
+              "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            },
+            "sbom": {
+              "path": "sbom.spdx.json",
+              "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+            }
+          },
+          "files": {
+            "bridge": "bin/darwin-aarch64/go-orca",
+            "daemon": "bin/darwin-aarch64/go-orcad"
+          },
+          "entrypoint": {
+            "argv": [
+              "{bridge}",
+              "agent",
+              "stdio",
+              "--daemon",
+              "{daemon}",
+              "--plugin-data",
+              "{pluginData}",
+              "--runtime-dir",
+              "{runtimeDir}",
+              "--cohort",
+              "{cohortId}",
+              "--purge-barrier",
+              "{purgeBarrier}",
+              "--barrier-parent-identity",
+              "{purgeBarrierParentIdentity}",
+              "--barrier-revision",
+              "{purgeBarrierRevision}"
+            ],
+            "cwd": "{pluginRoot}"
+          }
+        },
+        {
+          "os": "linux",
+          "arch": "amd64",
+          "artifact": {
+            "url": "https://example.invalid/go-orca-1.2.0-linux-amd64.tar.gz",
+            "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "signature": {
+              "kind": "sigstore",
+              "identity": "https://github.com/example/go-orca/.github/workflows/release.yml@refs/tags/v1.2.0"
+            },
+            "provenance": {
+              "path": "provenance.intoto.jsonl",
+              "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+            },
+            "sbom": {
+              "path": "sbom.spdx.json",
+              "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+            }
+          },
+          "files": {
+            "bridge": "bin/linux-amd64/go-orca",
+            "daemon": "bin/linux-amd64/go-orcad"
+          },
+          "entrypoint": {
+            "argv": [
+              "{bridge}",
+              "agent",
+              "stdio",
+              "--daemon",
+              "{daemon}",
+              "--plugin-data",
+              "{pluginData}",
+              "--runtime-dir",
+              "{runtimeDir}",
+              "--cohort",
+              "{cohortId}",
+              "--purge-barrier",
+              "{purgeBarrier}",
+              "--barrier-parent-identity",
+              "{purgeBarrierParentIdentity}",
+              "--barrier-revision",
+              "{purgeBarrierRevision}"
+            ],
+            "cwd": "{pluginRoot}"
+          }
+        }
+      ],
+      "lifecycle": {
+        "doctor": {
+          "argv": [
+            "{bridge}",
+            "doctor",
+            "--json",
+            "--plugin-data",
+            "{pluginData}",
+            "--runtime-dir",
+            "{runtimeDir}"
+          ]
+        },
+        "admin": {
+          "argvPrefix": ["{bridge}", "admin"],
+          "argvTail": [
+            "--plugin-data",
+            "{pluginData}",
+            "--runtime-dir",
+            "{runtimeDir}"
+          ]
+        },
+        "provision": {
+          "argv": [
+            "{bridge}",
+            "data",
+            "provision",
+            "--json-lines",
+            "--plugin-data",
+            "{pluginData}",
+            "--runtime-dir",
+            "{runtimeDir}",
+            "--cohort",
+            "{cohortId}",
+            "--purge-barrier",
+            "{purgeBarrier}",
+            "--barrier-parent-identity",
+            "{purgeBarrierParentIdentity}",
+            "--barrier-revision",
+            "{purgeBarrierRevision}",
+            "--provision-input",
+            "{provisionInput}"
+          ]
+        },
+        "purgePrepare": {
+          "argv": [
+            "{bridge}",
+            "data",
+            "prepare-purge",
+            "--json-lines",
+            "--plugin-data",
+            "{pluginData}",
+            "--runtime-dir",
+            "{runtimeDir}",
+            "--cohort",
+            "{cohortId}",
+            "--purge-barrier",
+            "{purgeBarrier}",
+            "--barrier-parent-identity",
+            "{purgeBarrierParentIdentity}",
+            "--barrier-revision",
+            "{purgeBarrierRevision}"
+          ]
+        },
+        "purgePreflight": {
+          "argv": [
+            "{bridge}",
+            "data",
+            "purge-preflight",
+            "--json",
+            "--plugin-data",
+            "{pluginData}",
+            "--runtime-dir",
+            "{runtimeDir}",
+            "--cohort",
+            "{cohortId}"
+          ]
+        },
+        "restartRequired": "never",
+        "uninstallData": "retain"
+      },
+      "fallback": {
+        "standardAcp": "required",
+        "richProjection": "optional"
+      }
+    }
+  ]
+}

@@ -11,6 +11,7 @@
 //! - `trust` — project-plugin trust management
 //! - `registry` — in-memory registry of active plugins
 
+pub mod agent_backend;
 pub mod discovery;
 pub mod git_install;
 pub mod hooks_adapter;
@@ -21,6 +22,10 @@ pub mod marketplace;
 pub mod registry;
 pub mod trust;
 
+pub use agent_backend::{
+    AgentBackendError, AgentBackendV1, ResolveContext, ResolvedArgv, parse_agent_backend,
+    resolve_argv, select_target, validate_backends,
+};
 pub use discovery::{
     DiscoveredPlugin, PluginOrigin, PluginScope, discover_plugins, project_plugin_dirs,
     project_plugin_dirs_in,

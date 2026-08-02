@@ -666,6 +666,8 @@ fn collect_plugin(
                 repository: None,
                 license: None,
                 keywords: vec![],
+                manifest_version: None,
+                agent_backends: vec![],
                 skills: None,
                 commands: None,
                 agents: None,

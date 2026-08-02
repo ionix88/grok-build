@@ -1,0 +1,399 @@
+{
+  "vectors": [
+    {
+      "id": "duplicate_backend_ids",
+      "expect": "duplicate_backend_id",
+      "manifest": {
+        "manifestVersion": 2,
+        "name": "dup-backends",
+        "version": "1.0.0",
+        "agentBackends": [
+          {
+            "schemaVersion": 1,
+            "id": "same",
+            "displayName": "A",
+            "requires": { "orca": ">=0.1.0", "acp": ">=1 <2" },
+            "capabilities": ["tools"],
+            "permissions": [{ "id": "native-code", "required": true }],
+            "daemon": {
+              "mode": "sharedPerVersion",
+              "backgroundWork": "survivesClientExit",
+              "storeSchemaMajor": 1,
+              "controlProtocolMajor": 1,
+              "supervisor": {
+                "argv": [
+                  "{bridge}",
+                  "daemon",
+                  "supervise",
+                  "--daemon",
+                  "{daemon}",
+                  "--plugin-data",
+                  "{pluginData}",
+                  "--runtime-dir",
+                  "{runtimeDir}",
+                  "--cohort",
+                  "{cohortId}",
+                  "--purge-barrier",
+                  "{purgeBarrier}",
+                  "--barrier-parent-identity",
+                  "{purgeBarrierParentIdentity}",
+                  "--barrier-revision",
+                  "{purgeBarrierRevision}"
+                ],
+                "cwd": "{pluginRoot}",
+                "detachFromBridge": true
+              }
+            },
+            "targets": [
+              {
+                "os": "darwin",
+                "arch": "aarch64",
+                "artifact": {
+                  "url": "https://example.invalid/a.tar.gz",
+                  "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                },
+                "files": {
+                  "bridge": "bin/go-orca",
+                  "daemon": "bin/go-orcad"
+                },
+                "entrypoint": {
+                  "argv": [
+                    "{bridge}",
+                    "agent",
+                    "stdio",
+                    "--daemon",
+                    "{daemon}",
+                    "--plugin-data",
+                    "{pluginData}",
+                    "--runtime-dir",
+                    "{runtimeDir}",
+                    "--cohort",
+                    "{cohortId}",
+                    "--purge-barrier",
+                    "{purgeBarrier}",
+                    "--barrier-parent-identity",
+                    "{purgeBarrierParentIdentity}",
+                    "--barrier-revision",
+                    "{purgeBarrierRevision}"
+                  ],
+                  "cwd": "{pluginRoot}"
+                }
+              }
+            ],
+            "lifecycle": {
+              "doctor": {
+                "argv": [
+                  "{bridge}",
+                  "doctor",
+                  "--json",
+                  "--plugin-data",
+                  "{pluginData}",
+                  "--runtime-dir",
+                  "{runtimeDir}"
+                ]
+              },
+              "admin": {
+                "argvPrefix": ["{bridge}", "admin"],
+                "argvTail": [
+                  "--plugin-data",
+                  "{pluginData}",
+                  "--runtime-dir",
+                  "{runtimeDir}"
+                ]
+              },
+              "provision": {
+                "argv": [
+                  "{bridge}",
+                  "data",
+                  "provision",
+                  "--json-lines",
+                  "--plugin-data",
+                  "{pluginData}",
+                  "--runtime-dir",
+                  "{runtimeDir}",
+                  "--cohort",
+                  "{cohortId}",
+                  "--purge-barrier",
+                  "{purgeBarrier}",
+                  "--barrier-parent-identity",
+                  "{purgeBarrierParentIdentity}",
+                  "--barrier-revision",
+                  "{purgeBarrierRevision}",
+                  "--provision-input",
+                  "{provisionInput}"
+                ]
+              },
+              "purgePrepare": {
+                "argv": [
+                  "{bridge}",
+                  "data",
+                  "prepare-purge",
+                  "--json-lines",
+                  "--plugin-data",
+                  "{pluginData}",
+                  "--runtime-dir",
+                  "{runtimeDir}",
+                  "--cohort",
+                  "{cohortId}",
+                  "--purge-barrier",
+                  "{purgeBarrier}",
+                  "--barrier-parent-identity",
+                  "{purgeBarrierParentIdentity}",
+                  "--barrier-revision",
+                  "{purgeBarrierRevision}"
+                ]
+              },
+              "purgePreflight": {
+                "argv": [
+                  "{bridge}",
+                  "data",
+                  "purge-preflight",
+                  "--json",
+                  "--plugin-data",
+                  "{pluginData}",
+                  "--runtime-dir",
+                  "{runtimeDir}",
+                  "--cohort",
+                  "{cohortId}"
+                ]
+              },
+              "restartRequired": "never",
+              "uninstallData": "retain"
+            },
+            "fallback": {
+              "standardAcp": "required",
+              "richProjection": "optional"
+            }
+          },
+          {
+            "schemaVersion": 1,
+            "id": "same",
+            "displayName": "B",
+            "requires": { "orca": ">=0.1.0", "acp": ">=1 <2" },
+            "capabilities": ["tools"],
+            "permissions": [{ "id": "native-code", "required": true }],
+            "daemon": {
+              "mode": "sharedPerVersion",
+              "backgroundWork": "survivesClientExit",
+              "storeSchemaMajor": 1,
+              "controlProtocolMajor": 1,
+              "supervisor": {
+                "argv": [
+                  "{bridge}",
+                  "daemon",
+                  "supervise",
+                  "--daemon",
+                  "{daemon}",
+                  "--plugin-data",
+                  "{pluginData}",
+                  "--runtime-dir",
+                  "{runtimeDir}",
+                  "--cohort",
+                  "{cohortId}",
+                  "--purge-barrier",
+                  "{purgeBarrier}",
+                  "--barrier-parent-identity",
+                  "{purgeBarrierParentIdentity}",
+                  "--barrier-revision",
+                  "{purgeBarrierRevision}"
+                ],
+                "cwd": "{pluginRoot}",
+                "detachFromBridge": true
+              }
+            },
+            "targets": [
+              {
+                "os": "linux",
+                "arch": "amd64",
+                "artifact": {
+                  "url": "https://example.invalid/b.tar.gz",
+                  "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                },
+                "files": {
+                  "bridge": "bin/go-orca",
+                  "daemon": "bin/go-orcad"
+                },
+                "entrypoint": {
+                  "argv": [
+                    "{bridge}",
+                    "agent",
+                    "stdio",
+                    "--daemon",
+                    "{daemon}",
+                    "--plugin-data",
+                    "{pluginData}",
+                    "--runtime-dir",
+                    "{runtimeDir}",
+                    "--cohort",
+                    "{cohortId}",
+                    "--purge-barrier",
+                    "{purgeBarrier}",
+                    "--barrier-parent-identity",
+                    "{purgeBarrierParentIdentity}",
+                    "--barrier-revision",
+                    "{purgeBarrierRevision}"
+                  ],
+                  "cwd": "{pluginRoot}"
+                }
+              }
+            ],
+            "lifecycle": {
+              "doctor": {
+                "argv": [
+                  "{bridge}",
+                  "doctor",
+                  "--json",
+                  "--plugin-data",
+                  "{pluginData}",
+                  "--runtime-dir",
+                  "{runtimeDir}"
+                ]
+              },
+              "admin": {
+                "argvPrefix": ["{bridge}", "admin"],
+                "argvTail": [
+                  "--plugin-data",
+                  "{pluginData}",
+                  "--runtime-dir",
+                  "{runtimeDir}"
+                ]
+              },
+              "provision": {
+                "argv": [
+                  "{bridge}",
+                  "data",
+                  "provision",
+                  "--json-lines",
+                  "--plugin-data",
+                  "{pluginData}",
+                  "--runtime-dir",
+                  "{runtimeDir}",
+                  "--cohort",
+                  "{cohortId}",
+                  "--purge-barrier",
+                  "{purgeBarrier}",
+                  "--barrier-parent-identity",
+                  "{purgeBarrierParentIdentity}",
+                  "--barrier-revision",
+                  "{purgeBarrierRevision}",
+                  "--provision-input",
+                  "{provisionInput}"
+                ]
+              },
+              "purgePrepare": {
+                "argv": [
+                  "{bridge}",
+                  "data",
+                  "prepare-purge",
+                  "--json-lines",
+                  "--plugin-data",
+                  "{pluginData}",
+                  "--runtime-dir",
+                  "{runtimeDir}",
+                  "--cohort",
+                  "{cohortId}",
+                  "--purge-barrier",
+                  "{purgeBarrier}",
+                  "--barrier-parent-identity",
+                  "{purgeBarrierParentIdentity}",
+                  "--barrier-revision",
+                  "{purgeBarrierRevision}"
+                ]
+              },
+              "purgePreflight": {
+                "argv": [
+                  "{bridge}",
+                  "data",
+                  "purge-preflight",
+                  "--json",
+                  "--plugin-data",
+                  "{pluginData}",
+                  "--runtime-dir",
+                  "{runtimeDir}",
+                  "--cohort",
+                  "{cohortId}"
+                ]
+              },
+              "restartRequired": "never",
+              "uninstallData": "retain"
+            },
+            "fallback": {
+              "standardAcp": "required",
+              "richProjection": "optional"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "duplicate_targets",
+      "expect": "duplicate_target",
+      "patch": {
+        "kind": "duplicate_first_target"
+      }
+    },
+    {
+      "id": "path_traversal",
+      "expect": "path_escape",
+      "patch": {
+        "kind": "set_bridge_path",
+        "value": "../escape/bin/go-orca"
+      }
+    },
+    {
+      "id": "relative_executable",
+      "expect": "relative_executable",
+      "patch": {
+        "kind": "set_entrypoint_argv0",
+        "value": "relative-bridge"
+      }
+    },
+    {
+      "id": "bad_placeholder",
+      "expect": "bad_placeholder",
+      "patch": {
+        "kind": "set_entrypoint_argv0",
+        "value": "{pluginRoot}/bin/go-orca"
+      }
+    },
+    {
+      "id": "bad_range",
+      "expect": "bad_semver_range",
+      "patch": {
+        "kind": "set_requires_orca",
+        "value": "not-a-range"
+      }
+    },
+    {
+      "id": "unknown_schema_major",
+      "expect": "unknown_schema_version",
+      "patch": {
+        "kind": "set_schema_version",
+        "value": 99
+      }
+    },
+    {
+      "id": "missing_lifecycle_route",
+      "expect": "missing_lifecycle_route",
+      "patch": {
+        "kind": "remove_lifecycle_key",
+        "value": "provision"
+      }
+    },
+    {
+      "id": "shell_text",
+      "expect": "shell_text",
+      "patch": {
+        "kind": "set_entrypoint_as_shell_string",
+        "value": "{bridge} agent stdio"
+      }
+    },
+    {
+      "id": "missing_manifest_version",
+      "expect": "manifest_version_required",
+      "patch": {
+        "kind": "remove_manifest_version"
+      }
+    }
+  ]
+}

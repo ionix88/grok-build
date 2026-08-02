@@ -48,7 +48,7 @@ fn run(args: Vec<String>) -> Result<u8, String> {
     let record: serde_json::Value =
         serde_json::from_slice(&record_raw).map_err(|e| format!("parse record: {e}"))?;
     let status = record.get("status").and_then(|v| v.as_str()).unwrap_or("");
-    if status == "frozen-record" && cli.todo != 2 && cli.todo != 3 {
+    if status == "frozen-record" && !matches!(cli.todo, 2 | 3 | 4) {
         return write_frozen_only(&cli, &root, &record_raw, &record);
     }
     match (cli.todo, cli.mode) {
@@ -56,6 +56,8 @@ fn run(args: Vec<String>) -> Result<u8, String> {
         (2, Mode::Failure) => run_todo2_failure(&cli, &root, &record_raw, &record),
         (3, Mode::Happy) => run_todo3_happy(&cli, &root, &record_raw, &record),
         (3, Mode::Failure) => run_todo3_failure(&cli, &root, &record_raw, &record),
+        (4, Mode::Happy) => run_todo4_happy(&cli, &root, &record_raw, &record),
+        (4, Mode::Failure) => run_todo4_failure(&cli, &root, &record_raw, &record),
         (n, _) => Err(format!("todo {n} has no live runner yet")),
     }
 }
@@ -557,6 +559,341 @@ fn run_todo3_failure(
 struct FixtureOut {
     ok: bool,
     detail: String,
+}
+
+fn run_todo4_happy(
+    cli: &Cli,
+    root: &Path,
+    record_raw: &[u8],
+    _record: &serde_json::Value,
+) -> Result<u8, String> {
+    use xai_grok_agent::plugins::agent_backend::{ResolveContext, resolve_argv, select_target};
+    use xai_grok_agent::plugins::manifest::parse_manifest_json;
+
+    let mut cmds = Vec::new();
+    let mut asserts = Vec::new();
+    let fixture_root = root.join(
+        "crates/codegen/xai-grok-agent/tests/fixtures/agent-backend-v2",
+    );
+    let owned = [
+        root.join("crates/codegen/xai-grok-agent/src/plugins/agent_backend.rs"),
+        root.join("crates/codegen/xai-grok-agent/src/plugins/manifest.rs"),
+        fixture_root.join("canonical-go-orca.json"),
+        fixture_root.join("content-v1.json"),
+        fixture_root.join("invalid-corpus.json"),
+    ];
+    if owned.iter().any(|p| !p.is_file()) {
+        asserts.push(assert_row("owned_paths", "FAIL", "Task 4 owned files missing"));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row("owned_paths", "PASS", "manifest + agent_backend + fixtures"));
+
+    let v1 = fs::read_to_string(fixture_root.join("content-v1.json")).map_err(|e| e.to_string())?;
+    match parse_manifest_json(&v1) {
+        Ok(m) if !m.has_agent_backends() => {
+            asserts.push(assert_row("v1_content", "PASS", "content-v1 loads"));
+        }
+        Ok(_) => {
+            asserts.push(assert_row("v1_content", "FAIL", "unexpected backends"));
+            return finish(FinishInput {
+                cli,
+                root,
+                record_raw,
+                cmds,
+                asserts,
+                status: "REJECTED",
+                assertion_ids: &[],
+            });
+        }
+        Err(e) => {
+            asserts.push(assert_row("v1_content", "FAIL", &e.to_string()));
+            return finish(FinishInput {
+                cli,
+                root,
+                record_raw,
+                cmds,
+                asserts,
+                status: "REJECTED",
+                assertion_ids: &[],
+            });
+        }
+    }
+
+    let canon =
+        fs::read_to_string(fixture_root.join("canonical-go-orca.json")).map_err(|e| e.to_string())?;
+    let m = match parse_manifest_json(&canon) {
+        Ok(m) => m,
+        Err(e) => {
+            asserts.push(assert_row("canonical_roundtrip", "FAIL", &e.to_string()));
+            return finish(FinishInput {
+                cli,
+                root,
+                record_raw,
+                cmds,
+                asserts,
+                status: "REJECTED",
+                assertion_ids: &[],
+            });
+        }
+    };
+    let ser = serde_json::to_string(&m).map_err(|e| e.to_string())?;
+    let m2 = parse_manifest_json(&ser).map_err(|e| e.to_string())?;
+    if m2.agent_backends.len() != 1 || m2.agent_backends[0].id != "go-orca" {
+        asserts.push(assert_row(
+            "canonical_roundtrip",
+            "FAIL",
+            "round-trip identity drift",
+        ));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row(
+        "canonical_roundtrip",
+        "PASS",
+        "canonical Go-Orca parse+serialize",
+    ));
+
+    let b = &m.agent_backends[0];
+    let ctx = ResolveContext {
+        plugin_root: PathBuf::from("/plugins/go-orca/1.2.0"),
+        plugin_data: PathBuf::from("/var/orca/plugin-data/go-orca"),
+        runtime_dir: PathBuf::from("/var/orca/runtime/go-orca"),
+        bridge: PathBuf::from("/plugins/go-orca/1.2.0/bin/darwin-aarch64/go-orca"),
+        daemon: PathBuf::from("/plugins/go-orca/1.2.0/bin/darwin-aarch64/go-orcad"),
+        cohort_id: "cohort-qa".into(),
+        purge_barrier: PathBuf::from("/var/orca/barriers/go-orca.barrier"),
+        purge_barrier_parent_identity: "aa".repeat(32),
+        purge_barrier_revision: 1,
+        provision_input: Some(PathBuf::from("/var/orca/tx/provision-input.json")),
+    };
+    let target = select_target(b, "darwin", "aarch64", None).map_err(|e| e.to_string())?;
+    let sup = b.daemon.supervisor.as_ref().ok_or("missing supervisor")?;
+    let r = resolve_argv(&sup.argv, &sup.cwd, &ctx).map_err(|e| e.to_string())?;
+    let ep = resolve_argv(&target.entrypoint.argv, &target.entrypoint.cwd, &ctx)
+        .map_err(|e| e.to_string())?;
+    let prov = resolve_argv(&b.lifecycle.provision.argv, "{pluginRoot}", &ctx)
+        .map_err(|e| e.to_string())?;
+    let purge = resolve_argv(&b.lifecycle.purge_prepare.argv, "{pluginRoot}", &ctx)
+        .map_err(|e| e.to_string())?;
+    if !Path::new(&r.argv[0]).is_absolute() || !Path::new(&ep.argv[0]).is_absolute() {
+        asserts.push(assert_row("resolve_argv", "FAIL", "non-absolute executable"));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    if !prov.argv.iter().any(|a| a.ends_with("provision-input.json")) {
+        asserts.push(assert_row("resolve_argv", "FAIL", "provision input missing"));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    if !purge.argv.iter().any(|a| a == "prepare-purge") {
+        asserts.push(assert_row("resolve_argv", "FAIL", "purge route missing"));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row(
+        "resolve_argv",
+        "PASS",
+        "supervisor/entrypoint/provision/purge resolved",
+    ));
+    cmds.push(cmd_row(
+        &["orca-todo-verify", "t04-happy", "parse-resolve"],
+        root,
+        0,
+        "ok",
+        "",
+    ));
+    asserts.push(assert_row(
+        "T04-HAPPY",
+        "PASS",
+        "v1 compatible + canonical round-trip + resolve",
+    ));
+    finish(FinishInput {
+        cli,
+        root,
+        record_raw,
+        cmds,
+        asserts,
+        status: "APPROVED",
+        assertion_ids: &["T04-HAPPY"],
+    })
+}
+
+fn run_todo4_failure(
+    cli: &Cli,
+    root: &Path,
+    record_raw: &[u8],
+    _record: &serde_json::Value,
+) -> Result<u8, String> {
+    use xai_grok_agent::plugins::manifest::parse_manifest_json;
+
+    let fixtures = [
+        "duplicate_backend_ids",
+        "duplicate_targets",
+        "path_traversal",
+        "relative_executable",
+        "bad_placeholder",
+        "bad_range",
+        "unknown_schema_major",
+        "missing_lifecycle_route",
+        "shell_text",
+        "missing_manifest_version",
+    ];
+    if let Some(only) = &cli.inject
+        && !fixtures.contains(&only.as_str())
+    {
+        return Err(format!("unknown --inject {only}"));
+    }
+    let mut cmds = Vec::new();
+    let mut asserts = Vec::new();
+    let mut all_ok = true;
+    let fixture_root = root.join(
+        "crates/codegen/xai-grok-agent/tests/fixtures/agent-backend-v2",
+    );
+    let corpus: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(fixture_root.join("invalid-corpus.json")).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    let base: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(fixture_root.join("canonical-go-orca.json"))
+            .map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    let vectors = corpus["vectors"].as_array().ok_or("corpus vectors")?;
+
+    for id in fixtures {
+        if cli.inject.as_deref().is_some_and(|only| only != id) {
+            continue;
+        }
+        let Some(v) = vectors.iter().find(|v| v["id"].as_str() == Some(id)) else {
+            all_ok = false;
+            asserts.push(assert_row(id, "FAIL", "vector missing from corpus"));
+            continue;
+        };
+        let manifest = if let Some(m) = v.get("manifest") {
+            m.clone()
+        } else {
+            todo4_apply_patch(base.clone(), v.get("patch").ok_or("patch")?)
+        };
+        let raw = serde_json::to_string(&manifest).map_err(|e| e.to_string())?;
+        let rejected = parse_manifest_json(&raw).is_err();
+        cmds.push(cmd_row(
+            &["orca-todo-verify", "t04-fixture", id],
+            root,
+            if rejected { 0 } else { 1 },
+            if rejected { "rejected" } else { "accepted" },
+            "",
+        ));
+        if rejected {
+            asserts.push(assert_row(id, "PASS", "typed refusal"));
+        } else {
+            all_ok = false;
+            asserts.push(assert_row(id, "FAIL", "accepted malformed vector"));
+        }
+    }
+
+    if all_ok {
+        asserts.push(assert_row(
+            "T04-FAILURE-GUARDS",
+            "PASS",
+            "all malformed vectors refused",
+        ));
+        finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "APPROVED",
+            assertion_ids: &["T04-FAILURE-GUARDS"],
+        })
+    } else {
+        finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        })
+    }
+}
+
+fn todo4_apply_patch(mut base: serde_json::Value, patch: &serde_json::Value) -> serde_json::Value {
+    let kind = patch["kind"].as_str().unwrap_or("");
+    match kind {
+        "duplicate_first_target" => {
+            let t0 = base["agentBackends"][0]["targets"][0].clone();
+            base["agentBackends"][0]["targets"]
+                .as_array_mut()
+                .unwrap()
+                .push(t0);
+        }
+        "set_bridge_path" => {
+            base["agentBackends"][0]["targets"][0]["files"]["bridge"] = patch["value"].clone();
+        }
+        "set_entrypoint_argv0" => {
+            base["agentBackends"][0]["targets"][0]["entrypoint"]["argv"][0] = patch["value"].clone();
+        }
+        "set_requires_orca" => {
+            base["agentBackends"][0]["requires"]["orca"] = patch["value"].clone();
+        }
+        "set_schema_version" => {
+            base["agentBackends"][0]["schemaVersion"] = patch["value"].clone();
+        }
+        "remove_lifecycle_key" => {
+            if let Some(key) = patch["value"].as_str() {
+                base["agentBackends"][0]["lifecycle"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove(key);
+            }
+        }
+        "set_entrypoint_as_shell_string" => {
+            base["agentBackends"][0]["targets"][0]["entrypoint"]["argv"] = patch["value"].clone();
+        }
+        "remove_manifest_version" => {
+            base.as_object_mut().unwrap().remove("manifestVersion");
+        }
+        _ => {}
+    }
+    base
 }
 
 fn run_todo3_fixture(bin: &Path, id: &str) -> FixtureOut {
