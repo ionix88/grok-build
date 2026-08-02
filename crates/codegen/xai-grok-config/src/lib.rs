@@ -21,6 +21,7 @@ mod loader;
 mod macos_managed;
 mod managed_cache;
 pub mod managed_text;
+pub mod orca_paths;
 mod paths;
 pub mod shell;
 pub mod signed_policy;
@@ -58,6 +59,11 @@ pub use managed_cache::{
     fail_closed_policy_armed_at, is_managed_config_hard_stale_for, is_managed_config_stale_for,
     managed_config_identity_changed_at, managed_deployment_id, managed_policy_compromised_for,
     mark_managed_config_synced, mark_managed_config_synced_at, normalize_identity,
+};
+pub use orca_paths::{
+    OrcaPathEnv, OrcaPathError, OrcaPaths, OrcaPlatform, ensure_private_dir,
+    path_has_symlink_or_reparse, resolve_orca_paths, resolve_orca_paths_current,
+    validate_runtime_root,
 };
 pub use paths::{
     claude_managed_settings_path, claude_managed_settings_probe_path, decode_cwd_from_dirname,

@@ -5,6 +5,7 @@
     unreachable_code,
     dead_code
 )]
+mod import_grok;
 #[cfg(all(feature = "jemalloc", unix))]
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
@@ -1657,6 +1658,12 @@ fn main() {
     }
     if let Some(code) = xai_grok_pager::voice::maybe_run_capture_subprocess() {
         std::process::exit(code);
+    }
+    {
+        let argv: Vec<String> = std::env::args().skip(1).collect();
+        if let Some(code) = import_grok::try_run_from_args(argv) {
+            std::process::exit(code);
+        }
     }
     let args = PagerArgs::parse_cli();
     if dispatch_version_if_requested(&args) || dispatch_doctor_if_requested(&args) {

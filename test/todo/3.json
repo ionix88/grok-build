@@ -3,25 +3,30 @@
   "todo": 3,
   "role": "orca",
   "title": "Add platform-native Orca paths and explicit non-destructive Grok import",
-  "status": "frozen-record",
+  "status": "live",
   "happy": {
     "assertionId": "T03-HAPPY",
     "action": {
-      "kind": "deferred",
+      "kind": "paths-and-import",
       "subject": "task-3"
     },
     "checks": [
-      "owned_by_later_task"
+      "owned_paths",
+      "orca_home_override",
+      "import_preview",
+      "import_confirm"
     ]
   },
   "failure": {
     "assertionId": "T03-FAILURE-GUARDS",
     "fixtures": [
-      {
-        "id": "deferred",
-        "expect": "product_validation_deferred"
-      }
+      { "id": "insecure_runtime", "expect": "typed_refusal" },
+      { "id": "path_swap", "expect": "typed_refusal" },
+      { "id": "stale_digest", "expect": "typed_refusal" },
+      { "id": "secret_candidate", "expect": "typed_refusal" },
+      { "id": "conflict", "expect": "typed_refusal" },
+      { "id": "write_failure", "expect": "typed_refusal" }
     ]
   },
-  "note": "Product implementation is Task 3. This record is frozen by Task 2."
+  "note": "Live Task 3 QA: platform-native Orca paths + orca import grok --preview|--confirm."
 }
