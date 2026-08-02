@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "todo": 15,
+  "role": "orca",
+  "title": "Host-owned plugin service for CLI and Extensions",
+  "status": "frozen-record",
+  "happy": {
+    "assertionId": "T15-HAPPY",
+    "action": {
+      "kind": "deferred",
+      "subject": "task-15"
+    },
+    "checks": [
+      "owned_by_later_task"
+    ]
+  },
+  "failure": {
+    "assertionId": "T15-FAILURE-GUARDS",
+    "fixtures": [
+      {
+        "id": "deferred",
+        "expect": "product_validation_deferred"
+      }
+    ]
+  },
+  "note": "Product implementation is Task 15. This record is frozen by Task 2."
+}

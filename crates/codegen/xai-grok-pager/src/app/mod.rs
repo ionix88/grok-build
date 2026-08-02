@@ -1860,9 +1860,10 @@ mod tests {
         assert!(!args.no_alt_screen);
     }
     #[test]
-    fn cli_command_name_is_grok() {
+    fn cli_command_name_is_orca() {
         use clap::CommandFactory;
-        assert_eq!(PagerArgs::command().get_name(), "grok");
+        assert_eq!(PagerArgs::command().get_name(), "orca");
+        assert_eq!(crate::app::cli::PUBLIC_CLI_NAME, "orca");
     }
     #[test]
     fn cli_help_output_header() {
@@ -1872,9 +1873,9 @@ mod tests {
         assert_eq!(
             first_5,
             vec![
-                "Grok Build TUI",
+                "Orca",
                 "",
-                "Usage: grok [OPTIONS] [PROMPT] [COMMAND]",
+                "Usage: orca [OPTIONS] [PROMPT] [COMMAND]",
                 "",
                 "Arguments:",
             ]

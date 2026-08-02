@@ -4,6 +4,13 @@ use clap::{ArgAction, Parser, Subcommand, ValueHint};
 use clap_complete::Shell;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+
+/// Public CLI product name (clap binary name, help Usage header, argv0).
+pub const PUBLIC_CLI_NAME: &str = "orca";
+
+/// Reserved built-in backend ID (plan D02). Selection/wiring is a later task;
+/// this constant freezes the identifier so public surfaces cannot drift.
+pub const NATIVE_BACKEND_ID: &str = "native";
 /// Top-level commands for the pager binary.
 #[derive(Debug, Clone, Subcommand)]
 pub enum Command {
@@ -78,8 +85,8 @@ clipboard (containers, SSH) and your terminal does not handle OSC 52 itself
 sync with your window size.
 
 Examples:
-  grok wrap docker exec -it my-container bash
-  grok wrap kubectl exec -it my-pod -- bash
+  orca wrap docker exec -it my-container bash
+  orca wrap kubectl exec -it my-pod -- bash
 
 See ~/.grok/README.md for more information.
 ")]
@@ -313,13 +320,13 @@ impl AgentArgs {
                 Ok(canonical) if canonical.is_dir() => Some(canonical),
                 Ok(_) => {
                     eprintln!(
-                        "grok: --plugin-dir {}: not a directory; skipping",
+                        "orca: --plugin-dir {}: not a directory; skipping",
                         p.display()
                     );
                     None
                 }
                 Err(e) => {
-                    eprintln!("grok: --plugin-dir {}: {e}; skipping", p.display());
+                    eprintln!("orca: --plugin-dir {}: {e}; skipping", p.display());
                     None
                 }
             })
@@ -398,9 +405,9 @@ pub struct LeaderArgs {
 }
 #[derive(Debug, Clone, Parser)]
 #[command(
-    name = "grok",
+    name = PUBLIC_CLI_NAME,
     version = env!("VERSION_WITH_COMMIT"),
-    about = "Grok Build TUI",
+    about = "Orca",
     disable_version_flag = true,
     next_display_order = None,
     help_template = "\
@@ -734,7 +741,7 @@ pub struct PagerArgs {
     /// Run standalone even when leader mode is configured.
     #[arg(long, conflicts_with = "leader", hide = true)]
     pub no_leader: bool,
-    /// Initial prompt for the interactive session, e.g. `grok "fix the bug"` or `grok --worktree=feat "create this feature"`.
+    /// Initial prompt for the interactive session, e.g. `orca "fix the bug"` or `orca --worktree=feat "create this feature"`.
     #[arg(
         value_name = "PROMPT",
         conflicts_with_all = &["single",
@@ -790,8 +797,8 @@ impl PagerArgs {
             .map(std::path::Path::new)
             .and_then(|p| p.file_name())
             .and_then(|n| n.to_str())
-            .filter(|n| *n == "grok" || *n == "agent")
-            .unwrap_or("grok")
+            .filter(|n| *n == PUBLIC_CLI_NAME || *n == "agent")
+            .unwrap_or(PUBLIC_CLI_NAME)
             .to_owned();
         Self::parse_from(std::iter::once(bin_name).chain(std::env::args().skip(1)))
     }
@@ -980,6 +987,58 @@ impl PagerArgs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::CommandFactory as _;
+
+    #[test]
+    fn baseline_agent_p_and_native_launch_semantics() {
+        let agent =
+            PagerArgs::try_parse_from(["baseline", "--agent", "explore"]).expect("--agent parses");
+        assert_eq!(agent.agent.as_deref(), Some("explore"));
+        assert!(agent.command.is_none(), "root --agent is not a subcommand");
+        assert!(agent.single.is_none());
+
+        let headless = PagerArgs::try_parse_from(["baseline", "-p", "say hi"]).expect("-p parses");
+        assert_eq!(headless.single.as_deref(), Some("say hi"));
+        assert!(headless.command.is_none());
+        assert!(headless.agent.is_none());
+
+        let bare = PagerArgs::try_parse_from(["baseline"]).expect("bare launch parses");
+        assert!(bare.command.is_none(), "bare launch is native TUI path");
+        assert!(bare.single.is_none());
+        assert!(bare.agent.is_none());
+        assert!(!bare.version);
+    }
+
+    #[test]
+    fn public_cli_name_is_orca() {
+        assert_eq!(PUBLIC_CLI_NAME, "orca");
+        assert_eq!(PagerArgs::command().get_name(), "orca");
+        let help = PagerArgs::command().render_long_help().to_string();
+        let first: Vec<&str> = help.lines().take(5).collect();
+        assert_eq!(
+            first,
+            vec![
+                "Orca",
+                "",
+                "Usage: orca [OPTIONS] [PROMPT] [COMMAND]",
+                "",
+                "Arguments:",
+            ]
+        );
+        assert!(
+            !help.lines().take(8).any(|l| l.contains("Usage: grok")),
+            "public help must not advertise legacy grok Usage header"
+        );
+    }
+
+    #[test]
+    fn native_backend_id_is_reserved() {
+        assert_eq!(NATIVE_BACKEND_ID, "native");
+        let args = PagerArgs::try_parse_from(["orca", "--agent", "native"]).expect("parses");
+        assert_eq!(args.agent.as_deref(), Some("native"));
+        assert_ne!(args.agent.as_deref(), Some(PUBLIC_CLI_NAME));
+    }
+
     #[test]
     fn version_flags_parse_as_early_intent_without_exiting() {
         for flag in ["--version", "-v", "-V"] {

@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "todo": 24,
+  "role": "orca",
+  "title": "Disable, drain, enable, and uninstall",
+  "status": "frozen-record",
+  "happy": {
+    "assertionId": "T24-HAPPY",
+    "action": {
+      "kind": "deferred",
+      "subject": "task-24"
+    },
+    "checks": [
+      "owned_by_later_task"
+    ]
+  },
+  "failure": {
+    "assertionId": "T24-FAILURE-GUARDS",
+    "fixtures": [
+      {
+        "id": "deferred",
+        "expect": "product_validation_deferred"
+      }
+    ]
+  },
+  "note": "Product implementation is Task 24. This record is frozen by Task 2."
+}

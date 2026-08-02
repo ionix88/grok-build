@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "todo": 4,
+  "role": "orca",
+  "title": "Define manifest v2 and generic agentBackends DTOs",
+  "status": "frozen-record",
+  "happy": {
+    "assertionId": "T04-HAPPY",
+    "action": {
+      "kind": "deferred",
+      "subject": "task-4"
+    },
+    "checks": [
+      "owned_by_later_task"
+    ]
+  },
+  "failure": {
+    "assertionId": "T04-FAILURE-GUARDS",
+    "fixtures": [
+      {
+        "id": "deferred",
+        "expect": "product_validation_deferred"
+      }
+    ]
+  },
+  "note": "Product implementation is Task 4. This record is frozen by Task 2."
+}

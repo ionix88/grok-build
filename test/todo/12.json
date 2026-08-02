@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "todo": 12,
+  "role": "orca",
+  "title": "Implement backend selection, defaults, and session pins",
+  "status": "frozen-record",
+  "happy": {
+    "assertionId": "T12-HAPPY",
+    "action": {
+      "kind": "deferred",
+      "subject": "task-12"
+    },
+    "checks": [
+      "owned_by_later_task"
+    ]
+  },
+  "failure": {
+    "assertionId": "T12-FAILURE-GUARDS",
+    "fixtures": [
+      {
+        "id": "deferred",
+        "expect": "product_validation_deferred"
+      }
+    ]
+  },
+  "note": "Product implementation is Task 12. This record is frozen by Task 2."
+}

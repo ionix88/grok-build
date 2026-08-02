@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "todo": 7,
+  "role": "orca",
+  "title": "Project host contracts and ACP fixtures for Go-Orca",
+  "status": "frozen-record",
+  "happy": {
+    "assertionId": "T07-HAPPY",
+    "action": {
+      "kind": "deferred",
+      "subject": "task-7"
+    },
+    "checks": [
+      "owned_by_later_task"
+    ]
+  },
+  "failure": {
+    "assertionId": "T07-FAILURE-GUARDS",
+    "fixtures": [
+      {
+        "id": "deferred",
+        "expect": "product_validation_deferred"
+      }
+    ]
+  },
+  "note": "Product implementation is Task 7. This record is frozen by Task 2."
+}

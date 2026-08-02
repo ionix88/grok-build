@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "todo": 2,
+  "role": "orca",
+  "title": "Rebrand the Rust host and public CLI as Orca",
+  "ownedPaths": [
+    "crates/codegen/xai-grok-pager-bin/Cargo.toml",
+    "crates/codegen/xai-grok-pager-bin/src/main.rs",
+    "crates/codegen/xai-grok-pager-bin/src/bin/orca_todo_verify.rs",
+    "crates/codegen/xai-grok-pager/src/app/cli.rs",
+    "scripts/ci/todo-verify.sh",
+    "README.md",
+    "docs/CLI.md",
+    "docs/INSTALL.md",
+    "docs/UPDATE.md",
+    "docs/COMPLETIONS.md",
+    "scripts/install.sh",
+    "scripts/install.ps1",
+    "packaging/homebrew.rb",
+    "packaging/scoop.json",
+    "test/todo/*.json"
+  ],
+  "happy": {
+    "assertionId": "T02-HAPPY",
+    "action": {
+      "kind": "public-surface-audit",
+      "subject": "orca-cli"
+    },
+    "checks": [
+      "public_bin_orca",
+      "clap_name_orca",
+      "native_backend_id_reserved",
+      "agent_flag_unchanged",
+      "no_legacy_public_grok_header",
+      "no_public_go_or_private_command"
+    ]
+  },
+  "failure": {
+    "assertionId": "T02-FAILURE-GUARDS",
+    "fixtures": [
+      {
+        "id": "grok_public_header",
+        "expectError": "legacy public header 'grok' is forbidden"
+      },
+      {
+        "id": "changed_agent",
+        "expectError": "--agent semantics must remain persona selector"
+      },
+      {
+        "id": "wrapper",
+        "expectError": "wrapper/shim public command is forbidden"
+      },
+      {
+        "id": "path_private_binary",
+        "expectError": "PATH private binary"
+      },
+      {
+        "id": "orca_grok",
+        "expectError": "public name 'orca-grok' is forbidden"
+      }
+    ]
+  }
+}

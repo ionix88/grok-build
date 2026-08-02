@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "todo": 6,
+  "role": "orca",
+  "title": "Freeze host compatibility, receipt, pin, cohort, and lifecycle schemas",
+  "status": "frozen-record",
+  "happy": {
+    "assertionId": "T06-HAPPY",
+    "action": {
+      "kind": "deferred",
+      "subject": "task-6"
+    },
+    "checks": [
+      "owned_by_later_task"
+    ]
+  },
+  "failure": {
+    "assertionId": "T06-FAILURE-GUARDS",
+    "fixtures": [
+      {
+        "id": "deferred",
+        "expect": "product_validation_deferred"
+      }
+    ]
+  },
+  "note": "Product implementation is Task 6. This record is frozen by Task 2."
+}

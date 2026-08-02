@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "todo": 27,
+  "role": "orca",
+  "title": "Prove installed backend lifecycle on real surfaces",
+  "status": "frozen-record",
+  "happy": {
+    "assertionId": "T27-HAPPY",
+    "action": {
+      "kind": "deferred",
+      "subject": "task-27"
+    },
+    "checks": [
+      "owned_by_later_task"
+    ]
+  },
+  "failure": {
+    "assertionId": "T27-FAILURE-GUARDS",
+    "fixtures": [
+      {
+        "id": "deferred",
+        "expect": "product_validation_deferred"
+      }
+    ]
+  },
+  "note": "Product implementation is Task 27. This record is frozen by Task 2."
+}

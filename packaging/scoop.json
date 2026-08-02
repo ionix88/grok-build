@@ -1,0 +1,22 @@
+{
+  "version": "0.0.0-dev",
+  "description": "Orca terminal AI coding host",
+  "homepage": "https://github.com/example/orca",
+  "license": "Apache-2.0",
+  "architecture": {
+    "64bit": {
+      "url": "https://example.invalid/orca/0.0.0-dev/orca-windows-amd64.tar.gz",
+      "hash": "REPLACE_AT_RELEASE"
+    }
+  },
+  "bin": "orca.exe",
+  "checkver": "github",
+  "autoupdate": {
+    "architecture": {
+      "64bit": {
+        "url": "https://example.invalid/orca/$version/orca-windows-amd64.tar.gz"
+      }
+    }
+  },
+  "notes": "Public command is orca only. No Windows support claim for this delivery wave."
+}

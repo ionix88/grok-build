@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "todo": 21,
+  "role": "orca",
+  "title": "Doctor and lifecycle DTOs",
+  "status": "frozen-record",
+  "happy": {
+    "assertionId": "T21-HAPPY",
+    "action": {
+      "kind": "deferred",
+      "subject": "task-21"
+    },
+    "checks": [
+      "owned_by_later_task"
+    ]
+  },
+  "failure": {
+    "assertionId": "T21-FAILURE-GUARDS",
+    "fixtures": [
+      {
+        "id": "deferred",
+        "expect": "product_validation_deferred"
+      }
+    ]
+  },
+  "note": "Product implementation is Task 21. This record is frozen by Task 2."
+}

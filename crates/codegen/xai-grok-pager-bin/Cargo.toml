@@ -4,16 +4,25 @@ version = "0.2.111"
 edition.workspace = true
 license = "Apache-2.0"
 authors = ["xAI"]
-default-run = "xai-grok-pager"
+default-run = "orca"
 
-# Composition-root binary for the Grok Build TUI. The artifact is still named
-# `xai-grok-pager`. This package exists so the binary can link both the pager
-# library and the optional `xai-grok-pager-minimal` render mode: `minimal`
-# depends on `xai-grok-pager`, so the pager library cannot depend back on it
-# (cargo cycle). The binary installs the minimal-mode IoC hooks at startup.
+# Composition-root binary for the Orca host TUI. Public artifact name is `orca`
+# (clap product name matches). Internal crate remains `xai-grok-pager-bin` for
+# provenance. This package links the pager library and optional
+# `xai-grok-pager-minimal` render mode: `minimal` depends on `xai-grok-pager`,
+# so the pager library cannot depend back on it (cargo cycle). The binary
+# installs the minimal-mode IoC hooks at startup.
 [[bin]]
-name = "xai-grok-pager"
+name = "orca"
 path = "src/main.rs"
+
+# Bounded Task QA runner (ORCA_QA). Explicit name — underscore auto-derive is
+# not accepted (plan registration table).
+[[bin]]
+name = "orca-todo-verify"
+path = "src/bin/orca_todo_verify.rs"
+test = false
+bench = false
 
 [dependencies]
 # The pager library (all application logic + the public API main.rs drives).

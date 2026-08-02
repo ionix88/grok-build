@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "todo": 11,
+  "role": "orca",
+  "title": "Register native and installed backends",
+  "status": "frozen-record",
+  "happy": {
+    "assertionId": "T11-HAPPY",
+    "action": {
+      "kind": "deferred",
+      "subject": "task-11"
+    },
+    "checks": [
+      "owned_by_later_task"
+    ]
+  },
+  "failure": {
+    "assertionId": "T11-FAILURE-GUARDS",
+    "fixtures": [
+      {
+        "id": "deferred",
+        "expect": "product_validation_deferred"
+      }
+    ]
+  },
+  "note": "Product implementation is Task 11. This record is frozen by Task 2."
+}

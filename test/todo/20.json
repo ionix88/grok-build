@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "todo": 20,
+  "role": "orca",
+  "title": "Optional Go-Orca rich ACP projection",
+  "status": "frozen-record",
+  "happy": {
+    "assertionId": "T20-HAPPY",
+    "action": {
+      "kind": "deferred",
+      "subject": "task-20"
+    },
+    "checks": [
+      "owned_by_later_task"
+    ]
+  },
+  "failure": {
+    "assertionId": "T20-FAILURE-GUARDS",
+    "fixtures": [
+      {
+        "id": "deferred",
+        "expect": "product_validation_deferred"
+      }
+    ]
+  },
+  "note": "Product implementation is Task 20. This record is frozen by Task 2."
+}

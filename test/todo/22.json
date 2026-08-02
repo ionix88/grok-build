@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "todo": 22,
+  "role": "orca",
+  "title": "Plugin update while retaining prior version",
+  "status": "frozen-record",
+  "happy": {
+    "assertionId": "T22-HAPPY",
+    "action": {
+      "kind": "deferred",
+      "subject": "task-22"
+    },
+    "checks": [
+      "owned_by_later_task"
+    ]
+  },
+  "failure": {
+    "assertionId": "T22-FAILURE-GUARDS",
+    "fixtures": [
+      {
+        "id": "deferred",
+        "expect": "product_validation_deferred"
+      }
+    ]
+  },
+  "note": "Product implementation is Task 22. This record is frozen by Task 2."
+}

@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "todo": 18,
+  "role": "orca",
+  "title": "Crash-safe install recovery",
+  "status": "frozen-record",
+  "happy": {
+    "assertionId": "T18-HAPPY",
+    "action": {
+      "kind": "deferred",
+      "subject": "task-18"
+    },
+    "checks": [
+      "owned_by_later_task"
+    ]
+  },
+  "failure": {
+    "assertionId": "T18-FAILURE-GUARDS",
+    "fixtures": [
+      {
+        "id": "deferred",
+        "expect": "product_validation_deferred"
+      }
+    ]
+  },
+  "note": "Product implementation is Task 18. This record is frozen by Task 2."
+}

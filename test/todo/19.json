@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "todo": 19,
+  "role": "orca",
+  "title": "Bind native plugin consent to artifacts",
+  "status": "frozen-record",
+  "happy": {
+    "assertionId": "T19-HAPPY",
+    "action": {
+      "kind": "deferred",
+      "subject": "task-19"
+    },
+    "checks": [
+      "owned_by_later_task"
+    ]
+  },
+  "failure": {
+    "assertionId": "T19-FAILURE-GUARDS",
+    "fixtures": [
+      {
+        "id": "deferred",
+        "expect": "product_validation_deferred"
+      }
+    ]
+  },
+  "note": "Product implementation is Task 19. This record is frozen by Task 2."
+}

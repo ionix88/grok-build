@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "todo": 55,
+  "role": "orca",
+  "title": "Host release artifacts and doctor",
+  "status": "frozen-record",
+  "happy": {
+    "assertionId": "T55-HAPPY",
+    "action": {
+      "kind": "deferred",
+      "subject": "task-55"
+    },
+    "checks": [
+      "owned_by_later_task"
+    ]
+  },
+  "failure": {
+    "assertionId": "T55-FAILURE-GUARDS",
+    "fixtures": [
+      {
+        "id": "deferred",
+        "expect": "product_validation_deferred"
+      }
+    ]
+  },
+  "note": "Product implementation is Task 55. This record is frozen by Task 2."
+}

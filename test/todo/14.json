@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "todo": 14,
+  "role": "orca",
+  "title": "Launch verified external backends over ACP stdio",
+  "status": "frozen-record",
+  "happy": {
+    "assertionId": "T14-HAPPY",
+    "action": {
+      "kind": "deferred",
+      "subject": "task-14"
+    },
+    "checks": [
+      "owned_by_later_task"
+    ]
+  },
+  "failure": {
+    "assertionId": "T14-FAILURE-GUARDS",
+    "fixtures": [
+      {
+        "id": "deferred",
+        "expect": "product_validation_deferred"
+      }
+    ]
+  },
+  "note": "Product implementation is Task 14. This record is frozen by Task 2."
+}
