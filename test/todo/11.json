@@ -24,6 +24,7 @@
       { "id": "missing_receipt", "expect": "MissingReceipt" },
       { "id": "corrupt_receipt", "expect": "JsonOrCorrupt" },
       { "id": "path_drift", "expect": "PathOwner" },
+      { "id": "path_drift_dotdot", "expect": "PathOwner" },
       { "id": "target_drift", "expect": "IncompatibleNotSelectable" },
       { "id": "owner_drift", "expect": "PathOwner" },
       { "id": "duplicate_id", "expect": "SourceQualifiedConflict" },

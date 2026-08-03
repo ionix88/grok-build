@@ -506,18 +506,20 @@ fn bind_install_root(
     opts: &DiscoverOpts,
 ) -> Result<(), BackendRegistryError> {
     let root = Path::new(&receipt.install_root);
-    if root.is_absolute() {
-        // Absolute install roots must be descendants of plugins_root.
-        let canon_plugins = plugins_root;
-        if !root.starts_with(canon_plugins) {
+    let bound = if root.is_absolute() {
+        // Lexical normalize both sides so `plugins_root/../../../etc/passwd`
+        // cannot pass a raw Path::starts_with prefix check.
+        let root_n = lexical_normalize(root);
+        let plugins_n = lexical_normalize(plugins_root);
+        if !path_is_under(&root_n, &plugins_n) {
             return Err(BackendRegistryError::PathOwner(format!(
                 "installRoot {} escapes plugins root {}",
                 receipt.install_root,
                 plugins_root.display()
             )));
         }
+        root_n
     } else {
-        // Relative roots are inventory-relative; reject traversal.
         if receipt.install_root.contains("..")
             || receipt.install_root.starts_with('/')
             || receipt.install_root.starts_with('\\')
@@ -526,31 +528,56 @@ fn bind_install_root(
                 receipt.install_root.clone(),
             ));
         }
-    }
+        lexical_normalize(&plugins_root.join(root))
+    };
 
     #[cfg(unix)]
     if let Some(expected) = opts.expected_owner_uid {
-        let check_path = if root.is_absolute() {
-            root.to_path_buf()
-        } else {
-            plugins_root.join(root)
-        };
-        if check_path.exists() {
+        if bound.exists() {
             use std::os::unix::fs::MetadataExt;
-            let meta = fs::metadata(&check_path).map_err(|e| {
-                BackendRegistryError::PathOwner(format!("{}: {e}", check_path.display()))
+            let meta = fs::metadata(&bound).map_err(|e| {
+                BackendRegistryError::PathOwner(format!("{}: {e}", bound.display()))
             })?;
             if meta.uid() != expected {
                 return Err(BackendRegistryError::PathOwner(format!(
                     "uid {} != expected {expected} for {}",
                     meta.uid(),
-                    check_path.display()
+                    bound.display()
                 )));
             }
         }
     }
     let _ = opts;
     Ok(())
+}
+
+/// Collapse `.` / `..` without touching the filesystem (receipts need not exist).
+fn lexical_normalize(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for c in path.components() {
+        match c {
+            Component::Prefix(_) | Component::RootDir => out.push(c.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => match out.components().next_back() {
+                Some(Component::Normal(_)) => {
+                    out.pop();
+                }
+                // At root/prefix or empty: stay put (Unix `/..` == `/`).
+                _ => {}
+            },
+            Component::Normal(s) => out.push(s),
+        }
+    }
+    out
+}
+
+/// Component-wise containment after both sides are lexically normalized.
+///
+/// Safe only when `..` has already been collapsed — raw `starts_with` alone
+/// accepts `plugins_root/../../../etc/passwd`.
+fn path_is_under(child: &Path, parent: &Path) -> bool {
+    child.starts_with(parent)
 }
 
 #[cfg(test)]

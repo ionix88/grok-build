@@ -251,7 +251,6 @@ fn content_only_receipt_without_native_code_excluded() {
 fn install_root_escape_plugins_dir_rejected() {
     let r = receipt("go-orca", "1.0.0", hex(1), "darwin-aarch64", consented());
     let mut escaped = r.clone();
-    // Re-seal with absolute escape path
     escaped.install_root = "/etc/passwd".into();
     escaped.receipt_digest.clear();
     let escaped = escaped.seal().unwrap();
@@ -264,6 +263,63 @@ fn install_root_escape_plugins_dir_rejected() {
     };
     let err = BackendRegistry::discover(Some(&doc), &host_darwin(), &opts).unwrap_err();
     assert!(matches!(err, BackendRegistryError::PathOwner(_)));
+}
+
+#[test]
+fn absolute_install_root_dotdot_escape_rejected_valid_descendant_ok() {
+    // Given plugins_root and a sealed receipt whose absolute installRoot
+    // lexically prefixes plugins_root but contains `..` that escapes it
+    // (independent verifier: Path::starts_with accepts this without normalize).
+    let plugins = PathBuf::from("/tmp/orca-plugins-t11-verify");
+    let hostile = plugins.join("../../../etc/passwd");
+    let valid = plugins.join("plugins/go-orca/1.0.0");
+
+    let mut bad = receipt("go-orca", "1.0.0", hex(1), "darwin-aarch64", consented());
+    bad.install_root = hostile.to_string_lossy().into_owned();
+    bad.receipt_digest.clear();
+    let bad = bad.seal().unwrap();
+    let mut doc = RegistryDocumentV2::empty();
+    doc.insert_receipt(bad).unwrap();
+    let doc = doc.seal().unwrap();
+    let opts = DiscoverOpts {
+        plugins_root: Some(plugins.clone()),
+        ..DiscoverOpts::default()
+    };
+    // When discovering with plugins_root binding
+    let err = BackendRegistry::discover(Some(&doc), &host_darwin(), &opts).unwrap_err();
+    // Then absolute .. escape is PathOwner (not registered)
+    assert!(
+        matches!(err, BackendRegistryError::PathOwner(_)),
+        "hostile absolute .. must fail closed, got {err:?}"
+    );
+
+    // And a normalized absolute descendant under plugins_root is accepted
+    let mut good = receipt("go-orca", "1.1.0", hex(4), "darwin-aarch64", consented());
+    good.install_root = valid.to_string_lossy().into_owned();
+    good.receipt_digest.clear();
+    let good = good.seal().unwrap();
+    let mut doc_ok = RegistryDocumentV2::empty();
+    doc_ok.insert_receipt(good).unwrap();
+    let doc_ok = doc_ok.seal().unwrap();
+    let reg = BackendRegistry::discover(Some(&doc_ok), &host_darwin(), &opts).unwrap();
+    let d = reg.by_id_version("go-orca", Some("1.1.0")).unwrap();
+    assert!(d.selectable);
+    assert_eq!(
+        d.install_root.as_deref(),
+        Some(valid.to_string_lossy().as_ref())
+    );
+
+    // Nested foo/../../etc/passwd also escapes
+    let nested = plugins.join("foo/../../etc/passwd");
+    let mut nested_bad = receipt("go-orca", "2.0.0", hex(5), "darwin-aarch64", consented());
+    nested_bad.install_root = nested.to_string_lossy().into_owned();
+    nested_bad.receipt_digest.clear();
+    let nested_bad = nested_bad.seal().unwrap();
+    let mut doc_n = RegistryDocumentV2::empty();
+    doc_n.insert_receipt(nested_bad).unwrap();
+    let doc_n = doc_n.seal().unwrap();
+    let err_n = BackendRegistry::discover(Some(&doc_n), &host_darwin(), &opts).unwrap_err();
+    assert!(matches!(err_n, BackendRegistryError::PathOwner(_)));
 }
 
 #[test]

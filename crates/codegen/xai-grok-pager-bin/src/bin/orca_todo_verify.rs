@@ -3631,6 +3631,73 @@ fn run_todo11_failure(
     }
 
     {
+        // Absolute installRoot that lexically prefixes plugins_root but escapes
+        // via `..` (independent verifier path_starts_with.txt).
+        let plugins = PathBuf::from("/tmp/orca-plugins-t11-verify");
+        let hostile = plugins.join("../../../etc/passwd");
+        let mut r = base_receipt("go-orca", "1.0.0", h(1), "darwin-aarch64");
+        r.install_root = hostile.to_string_lossy().into_owned();
+        r.receipt_digest.clear();
+        let r = r.seal().map_err(|e| e.to_string())?;
+        let mut doc = RegistryDocumentV2::empty();
+        doc.insert_receipt(r).map_err(|e| e.to_string())?;
+        let doc = doc.seal().map_err(|e| e.to_string())?;
+        let opts = DiscoverOpts {
+            plugins_root: Some(plugins.clone()),
+            ..DiscoverOpts::default()
+        };
+        let err = BackendRegistry::discover(Some(&doc), &host, &opts);
+        let ok = matches!(err, Err(BackendRegistryError::PathOwner(_)));
+        asserts.push(assert_row(
+            "path_drift_dotdot",
+            if ok { "PASS" } else { "FAIL" },
+            &format!("hostile={} err={err:?}", hostile.display()),
+        ));
+        if !ok {
+            return finish(FinishInput {
+                cli,
+                root,
+                record_raw,
+                cmds,
+                asserts,
+                status: "REJECTED",
+                assertion_ids: &[],
+            });
+        }
+        // Valid absolute descendant still accepted.
+        let valid = plugins.join("plugins/go-orca/1.0.0");
+        let mut ok_r = base_receipt("go-orca", "1.1.0", h(4), "darwin-aarch64");
+        ok_r.install_root = valid.to_string_lossy().into_owned();
+        ok_r.receipt_digest.clear();
+        let ok_r = ok_r.seal().map_err(|e| e.to_string())?;
+        let mut doc_ok = RegistryDocumentV2::empty();
+        doc_ok.insert_receipt(ok_r).map_err(|e| e.to_string())?;
+        let doc_ok = doc_ok.seal().map_err(|e| e.to_string())?;
+        let reg = BackendRegistry::discover(Some(&doc_ok), &host, &opts)
+            .map_err(|e| e.to_string())?;
+        let d = reg
+            .by_id_version("go-orca", Some("1.1.0"))
+            .ok_or("valid descendant missing")?;
+        let ok_valid = d.selectable;
+        asserts.push(assert_row(
+            "path_drift_dotdot_valid",
+            if ok_valid { "PASS" } else { "FAIL" },
+            &format!("valid={}", valid.display()),
+        ));
+        if !ok_valid {
+            return finish(FinishInput {
+                cli,
+                root,
+                record_raw,
+                cmds,
+                asserts,
+                status: "REJECTED",
+                assertion_ids: &[],
+            });
+        }
+    }
+
+    {
         let r = base_receipt("go-orca", "1.0.0", h(1), "linux-x86_64");
         let mut doc = RegistryDocumentV2::empty();
         doc.insert_receipt(r).map_err(|e| e.to_string())?;
