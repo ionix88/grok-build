@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
+use super::agent_backend::{refuse_native_backend_source, NativeBackendSource};
 use super::manifest::{ManifestLoadResult, PluginManifest, load_manifest, name_from_dirname};
 use super::trust::TrustStore;
 
@@ -1864,4 +1865,51 @@ mod tests {
             1
         );
     }
+
+    #[test]
+    fn content_discovery_refuses_project_native_backend_registration() {
+        assert!(content_plugins_exclude_native_backend_registration());
+        let err = refuse_backend_registration_from_content_plugin(PluginScope::Project, true, true)
+            .unwrap_err();
+        assert_eq!(err, NativeBackendSource::ProjectTree);
+        // Pure content plugins remain allowed (no backend claim).
+        assert!(refuse_backend_registration_from_content_plugin(
+            PluginScope::Project,
+            false,
+            false
+        )
+        .is_ok());
+    }
+}
+
+// ── Backend discovery boundary (Task 11) ──────────────────────────────
+
+/// Content-plugin discovery never registers native agent backends.
+///
+/// Host backends load only from validated v2 install receipts (pager
+/// `backend::registry`). This keeps project/user/cli content plugins separate.
+pub fn content_plugins_exclude_native_backend_registration() -> bool {
+    true
+}
+
+/// Refuse promoting a content-discovered plugin into the host backend registry
+/// when it claims `agentBackends` or native code.
+///
+/// Pure content plugins (`has_agent_backends == false && !native_code_claimed`)
+/// return `Ok(())` — they stay on the content-plugin path only.
+pub fn refuse_backend_registration_from_content_plugin(
+    scope: PluginScope,
+    has_agent_backends: bool,
+    native_code_claimed: bool,
+) -> Result<(), NativeBackendSource> {
+    if !has_agent_backends && !native_code_claimed {
+        return Ok(());
+    }
+    let source = match scope {
+        PluginScope::Project => NativeBackendSource::ProjectTree,
+        PluginScope::CliOverride | PluginScope::User | PluginScope::ConfigPath => {
+            NativeBackendSource::ContentPluginDiscovery
+        }
+    };
+    refuse_native_backend_source(source)
 }

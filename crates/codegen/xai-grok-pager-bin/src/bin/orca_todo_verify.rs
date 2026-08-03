@@ -48,7 +48,7 @@ fn run(args: Vec<String>) -> Result<u8, String> {
     let record: serde_json::Value =
         serde_json::from_slice(&record_raw).map_err(|e| format!("parse record: {e}"))?;
     let status = record.get("status").and_then(|v| v.as_str()).unwrap_or("");
-    if status == "frozen-record" && !matches!(cli.todo, 2 | 3 | 4 | 5 | 6 | 7 | 10) {
+    if status == "frozen-record" && !matches!(cli.todo, 2 | 3 | 4 | 5 | 6 | 7 | 10 | 11) {
         return write_frozen_only(&cli, &root, &record_raw, &record);
     }
     match (cli.todo, cli.mode) {
@@ -66,6 +66,8 @@ fn run(args: Vec<String>) -> Result<u8, String> {
         (7, Mode::Failure) => run_todo7_failure(&cli, &root, &record_raw, &record),
         (10, Mode::Happy) => run_todo10_happy(&cli, &root, &record_raw, &record),
         (10, Mode::Failure) => run_todo10_failure(&cli, &root, &record_raw, &record),
+        (11, Mode::Happy) => run_todo11_happy(&cli, &root, &record_raw, &record),
+        (11, Mode::Failure) => run_todo11_failure(&cli, &root, &record_raw, &record),
         (n, _) => Err(format!("todo {n} has no live runner yet")),
     }
 }
@@ -3212,6 +3214,611 @@ fn run_todo10_failure(
         asserts,
         status: "APPROVED",
         assertion_ids: &["T10-FAILURE-GUARDS"],
+    })
+}
+
+fn run_todo11_happy(
+    cli: &Cli,
+    root: &Path,
+    record_raw: &[u8],
+    _record: &serde_json::Value,
+) -> Result<u8, String> {
+    use xai_grok_agent::plugins::agent_backend::HostPlatform;
+    use xai_grok_agent::plugins::discovery::content_plugins_exclude_native_backend_registration;
+    use xai_grok_pager::backend::{
+        BackendKind, BackendRegistry, DiscoverOpts, HealthStatus, NATIVE_BACKEND_ID,
+    };
+    use xai_grok_pager::plugin_host::receipts::{
+        FileRole, InstallReceiptV1, InventoryFile, RegistryDocumentV2, TrustState,
+    };
+
+    let mut cmds = Vec::new();
+    let mut asserts = Vec::new();
+    let owned = [
+        root.join("crates/codegen/xai-grok-pager/src/backend/mod.rs"),
+        root.join("crates/codegen/xai-grok-pager/src/backend/registry.rs"),
+        root.join("crates/codegen/xai-grok-pager/src/backend/registry_test.rs"),
+        root.join("crates/codegen/xai-grok-agent/src/plugins/discovery.rs"),
+        root.join("crates/codegen/xai-grok-agent/src/plugins/agent_backend.rs"),
+    ];
+    if owned.iter().any(|p| !p.is_file()) {
+        asserts.push(assert_row(
+            "owned_paths",
+            "FAIL",
+            "Task 11 owned files missing",
+        ));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row(
+        "owned_paths",
+        "PASS",
+        "backend registry + discovery seams",
+    ));
+
+    fn h(n: u8) -> String {
+        format!("{n:x}").repeat(64)
+    }
+    fn mk_receipt(id: &str, ver: &str, archive: String, target: &str) -> InstallReceiptV1 {
+        InstallReceiptV1 {
+            schema_version: 1,
+            plugin_id: id.into(),
+            version: ver.into(),
+            archive_sha256: archive,
+            install_root: format!("plugins/{id}/{ver}"),
+            target: target.into(),
+            files: vec![InventoryFile {
+                relative_path: "bin/bridge".into(),
+                role: FileRole::Executable,
+                mode_octal: "0755".into(),
+                length: 1,
+                content_sha256: h(2),
+            }],
+            trust: TrustState::Consented {
+                consent_digest: h(3),
+                consented_at: "2026-08-03T00:00:00.000Z".into(),
+            },
+            native_code: true,
+            capabilities: vec!["acp".into()],
+            permissions: vec![],
+            installed_at: "2026-08-03T00:00:00.000Z".into(),
+            receipt_digest: String::new(),
+        }
+        .seal()
+        .expect("seal receipt")
+    }
+
+    let host = HostPlatform {
+        os: "darwin".into(),
+        arch: "aarch64".into(),
+        libc: None,
+    };
+    let r1 = mk_receipt("go-orca", "1.0.0", h(1), "darwin-aarch64");
+    let r2 = mk_receipt("go-orca", "1.1.0", h(4), "darwin-aarch64");
+    let d1 = r1.receipt_digest.clone();
+    let d2 = r2.receipt_digest.clone();
+    let mut doc = RegistryDocumentV2::empty();
+    doc.insert_receipt(r1).map_err(|e| e.to_string())?;
+    doc.insert_receipt(r2).map_err(|e| e.to_string())?;
+    let doc = doc.seal().map_err(|e| e.to_string())?;
+
+    let reg = BackendRegistry::discover(Some(&doc), &host, &DiscoverOpts::default())
+        .map_err(|e| e.to_string())?;
+    if reg.native().backend_id != NATIVE_BACKEND_ID || !reg.native().selectable {
+        asserts.push(assert_row(
+            "native_always",
+            "FAIL",
+            "native missing/unselectable",
+        ));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row(
+        "native_always",
+        "PASS",
+        "native registered selectable",
+    ));
+
+    let versions = reg.versions_of("go-orca");
+    if versions.len() != 2 {
+        asserts.push(assert_row(
+            "two_versions",
+            "FAIL",
+            &format!("want 2 got {}", versions.len()),
+        ));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    let v1 = reg.by_id_version("go-orca", Some("1.0.0")).ok_or("v1")?;
+    let v2 = reg.by_id_version("go-orca", Some("1.1.0")).ok_or("v2")?;
+    if v1.receipt_digest.as_deref() != Some(d1.as_str())
+        || v2.receipt_digest.as_deref() != Some(d2.as_str())
+        || v1.kind != BackendKind::External
+        || v1.health != HealthStatus::NotProbed
+        || !v1.selectable
+        || !v2.selectable
+    {
+        asserts.push(assert_row(
+            "two_versions",
+            "FAIL",
+            "receipt/target/selectable drift",
+        ));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row(
+        "two_versions",
+        "PASS",
+        "1.0.0+1.1.0 receipt-bound selectable",
+    ));
+
+    if !content_plugins_exclude_native_backend_registration() {
+        asserts.push(assert_row("content_separate", "FAIL", "content gate false"));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row(
+        "content_separate",
+        "PASS",
+        "content discovery excludes native backends",
+    ));
+
+    let lines = reg.format_status_lines();
+    let listing = lines.join("\n");
+    if lines.len() != 3
+        || !lines
+            .iter()
+            .any(|l| l.contains("id=native") && l.contains("selectable=yes"))
+        || !lines.iter().any(|l| l.contains("version=1.0.0"))
+        || !lines.iter().any(|l| l.contains("version=1.1.0"))
+        || !lines.iter().all(|l| l.contains("health=not_probed"))
+    {
+        asserts.push(assert_row("status_surface", "FAIL", &listing));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row(
+        "status_surface",
+        "PASS",
+        "format_status_lines native+2 versions no spawn",
+    ));
+
+    cmds.push(cmd_row(
+        &["orca-todo-verify", "t11-happy", "backend-registry-discover"],
+        root,
+        0,
+        &listing,
+        "",
+    ));
+    asserts.push(assert_row(
+        "T11-HAPPY",
+        "PASS",
+        "native + two validated receipt versions listed",
+    ));
+    let code = finish(FinishInput {
+        cli,
+        root,
+        record_raw,
+        cmds,
+        asserts,
+        status: "APPROVED",
+        assertion_ids: &["T11-HAPPY"],
+    })?;
+    fs::write(
+        cli.out_dir.join("backend-status.txt"),
+        format!("{listing}\n"),
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(code)
+}
+
+fn run_todo11_failure(
+    cli: &Cli,
+    root: &Path,
+    record_raw: &[u8],
+    _record: &serde_json::Value,
+) -> Result<u8, String> {
+    use xai_grok_agent::plugins::agent_backend::{
+        HostPlatform, NativeBackendSource, refuse_native_backend_source,
+    };
+    use xai_grok_pager::backend::{BackendRegistry, BackendRegistryError, DiscoverOpts};
+    use xai_grok_pager::plugin_host::receipts::{
+        FileRole, InstallReceiptV1, InventoryFile, REGISTRY_SCHEMA_V2, RegistryDocumentV2,
+        TrustState,
+    };
+
+    let mut cmds = Vec::new();
+    let mut asserts = Vec::new();
+
+    fn h(n: u8) -> String {
+        format!("{n:x}").repeat(64)
+    }
+    fn base_receipt(id: &str, ver: &str, archive: String, target: &str) -> InstallReceiptV1 {
+        InstallReceiptV1 {
+            schema_version: 1,
+            plugin_id: id.into(),
+            version: ver.into(),
+            archive_sha256: archive,
+            install_root: format!("plugins/{id}/{ver}"),
+            target: target.into(),
+            files: vec![InventoryFile {
+                relative_path: "bin/bridge".into(),
+                role: FileRole::Executable,
+                mode_octal: "0755".into(),
+                length: 1,
+                content_sha256: h(2),
+            }],
+            trust: TrustState::Consented {
+                consent_digest: h(3),
+                consented_at: "2026-08-03T00:00:00.000Z".into(),
+            },
+            native_code: true,
+            capabilities: vec!["acp".into()],
+            permissions: vec![],
+            installed_at: "2026-08-03T00:00:00.000Z".into(),
+            receipt_digest: String::new(),
+        }
+        .seal()
+        .expect("seal")
+    }
+
+    let host = HostPlatform {
+        os: "darwin".into(),
+        arch: "aarch64".into(),
+        libc: None,
+    };
+
+    {
+        let mut r = base_receipt("go-orca", "1.0.0", h(1), "darwin-aarch64");
+        r.receipt_digest = h(9);
+        let mut doc = RegistryDocumentV2::empty();
+        doc.schema_version = REGISTRY_SCHEMA_V2;
+        doc.receipts.insert(r.receipt_digest.clone(), r);
+        let err = BackendRegistry::discover(Some(&doc), &host, &DiscoverOpts::default());
+        let ok = matches!(
+            err,
+            Err(BackendRegistryError::ForgedRow(_)) | Err(BackendRegistryError::Receipt(_))
+        );
+        asserts.push(assert_row(
+            "forged_receipt",
+            if ok { "PASS" } else { "FAIL" },
+            &format!("{err:?}"),
+        ));
+        if !ok {
+            return finish(FinishInput {
+                cli,
+                root,
+                record_raw,
+                cmds,
+                asserts,
+                status: "REJECTED",
+                assertion_ids: &[],
+            });
+        }
+    }
+
+    {
+        let err = BackendRegistry::load_from_path(
+            Path::new("/no/such/registry-v2-task11.json"),
+            &host,
+            &DiscoverOpts::default(),
+        );
+        let ok = matches!(err, Err(BackendRegistryError::MissingReceipt(_)));
+        asserts.push(assert_row(
+            "missing_receipt",
+            if ok { "PASS" } else { "FAIL" },
+            &format!("{err:?}"),
+        ));
+        if !ok {
+            return finish(FinishInput {
+                cli,
+                root,
+                record_raw,
+                cmds,
+                asserts,
+                status: "REJECTED",
+                assertion_ids: &[],
+            });
+        }
+    }
+
+    {
+        let dir = env::temp_dir().join(format!("orca-t11-corrupt-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let path = dir.join("registry-v2.json");
+        fs::write(&path, "{broken").map_err(|e| e.to_string())?;
+        let err = BackendRegistry::load_from_path(&path, &host, &DiscoverOpts::default());
+        let ok = matches!(
+            err,
+            Err(BackendRegistryError::Json(_))
+                | Err(BackendRegistryError::Corrupt(_))
+                | Err(BackendRegistryError::Receipt(_))
+        );
+        asserts.push(assert_row(
+            "corrupt_receipt",
+            if ok { "PASS" } else { "FAIL" },
+            &format!("{err:?}"),
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        if !ok {
+            return finish(FinishInput {
+                cli,
+                root,
+                record_raw,
+                cmds,
+                asserts,
+                status: "REJECTED",
+                assertion_ids: &[],
+            });
+        }
+    }
+
+    {
+        let mut r = base_receipt("go-orca", "1.0.0", h(1), "darwin-aarch64");
+        r.install_root = "/etc/passwd".into();
+        r.receipt_digest.clear();
+        let r = r.seal().map_err(|e| e.to_string())?;
+        let mut doc = RegistryDocumentV2::empty();
+        doc.insert_receipt(r).map_err(|e| e.to_string())?;
+        let doc = doc.seal().map_err(|e| e.to_string())?;
+        let opts = DiscoverOpts {
+            plugins_root: Some(PathBuf::from("/tmp/orca-plugins-t11")),
+            ..DiscoverOpts::default()
+        };
+        let err = BackendRegistry::discover(Some(&doc), &host, &opts);
+        let ok = matches!(err, Err(BackendRegistryError::PathOwner(_)));
+        asserts.push(assert_row(
+            "path_drift",
+            if ok { "PASS" } else { "FAIL" },
+            &format!("{err:?}"),
+        ));
+        if !ok {
+            return finish(FinishInput {
+                cli,
+                root,
+                record_raw,
+                cmds,
+                asserts,
+                status: "REJECTED",
+                assertion_ids: &[],
+            });
+        }
+    }
+
+    {
+        let r = base_receipt("go-orca", "1.0.0", h(1), "linux-x86_64");
+        let mut doc = RegistryDocumentV2::empty();
+        doc.insert_receipt(r).map_err(|e| e.to_string())?;
+        let doc = doc.seal().map_err(|e| e.to_string())?;
+        let reg = BackendRegistry::discover(Some(&doc), &host, &DiscoverOpts::default())
+            .map_err(|e| e.to_string())?;
+        let d = reg
+            .by_id_version("go-orca", Some("1.0.0"))
+            .ok_or("missing")?;
+        let ok = !d.selectable
+            && matches!(
+                d.compatibility,
+                xai_grok_pager::backend::Compatibility::Incompatible { .. }
+            )
+            && reg.native().selectable;
+        asserts.push(assert_row(
+            "target_drift",
+            if ok { "PASS" } else { "FAIL" },
+            &format!("selectable={} compat={:?}", d.selectable, d.compatibility),
+        ));
+        if !ok {
+            return finish(FinishInput {
+                cli,
+                root,
+                record_raw,
+                cmds,
+                asserts,
+                status: "REJECTED",
+                assertion_ids: &[],
+            });
+        }
+    }
+
+    {
+        let r = base_receipt("native", "1.0.0", h(1), "darwin-aarch64");
+        let mut doc = RegistryDocumentV2::empty();
+        doc.insert_receipt(r).map_err(|e| e.to_string())?;
+        let doc = doc.seal().map_err(|e| e.to_string())?;
+        let reg = BackendRegistry::discover(Some(&doc), &host, &DiscoverOpts::default())
+            .map_err(|e| e.to_string())?;
+        let ok = !reg.conflicts().is_empty()
+            && reg.native().selectable
+            && reg
+                .list()
+                .iter()
+                .filter(|d| d.kind == xai_grok_pager::backend::BackendKind::External)
+                .all(|d| !d.selectable);
+        asserts.push(assert_row(
+            "duplicate_id",
+            if ok { "PASS" } else { "FAIL" },
+            &format!("conflicts={:?}", reg.conflicts()),
+        ));
+        if !ok {
+            return finish(FinishInput {
+                cli,
+                root,
+                record_raw,
+                cmds,
+                asserts,
+                status: "REJECTED",
+                assertion_ids: &[],
+            });
+        }
+    }
+
+    {
+        let err = BackendRegistry::register_path_executable("go-orca");
+        let ok = matches!(err, Err(BackendRegistryError::PathOnlyExecutable(_)));
+        asserts.push(assert_row(
+            "path_only",
+            if ok { "PASS" } else { "FAIL" },
+            &format!("{err:?}"),
+        ));
+        if !ok {
+            return finish(FinishInput {
+                cli,
+                root,
+                record_raw,
+                cmds,
+                asserts,
+                status: "REJECTED",
+                assertion_ids: &[],
+            });
+        }
+    }
+
+    #[cfg(unix)]
+    {
+        let dir = env::temp_dir().join(format!("orca-t11-owner-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let install = dir.join("plugins/go-orca/1.0.0");
+        fs::create_dir_all(&install).map_err(|e| e.to_string())?;
+        let mut r = base_receipt("go-orca", "1.0.0", h(1), "darwin-aarch64");
+        r.install_root = install.to_string_lossy().into_owned();
+        r.receipt_digest.clear();
+        let r = r.seal().map_err(|e| e.to_string())?;
+        let mut doc = RegistryDocumentV2::empty();
+        doc.insert_receipt(r).map_err(|e| e.to_string())?;
+        let doc = doc.seal().map_err(|e| e.to_string())?;
+        let opts = DiscoverOpts {
+            plugins_root: Some(dir.clone()),
+            expected_owner_uid: Some(0),
+            ..DiscoverOpts::default()
+        };
+        let err = BackendRegistry::discover(Some(&doc), &host, &opts);
+        let ok = matches!(err, Err(BackendRegistryError::PathOwner(_)));
+        asserts.push(assert_row(
+            "owner_drift",
+            if ok { "PASS" } else { "FAIL" },
+            &format!("{err:?}"),
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        if !ok {
+            return finish(FinishInput {
+                cli,
+                root,
+                record_raw,
+                cmds,
+                asserts,
+                status: "REJECTED",
+                assertion_ids: &[],
+            });
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        asserts.push(assert_row("owner_drift", "PASS", "skipped non-unix"));
+    }
+
+    for (src, label) in [
+        (NativeBackendSource::ProjectTree, "project"),
+        (NativeBackendSource::PathLookup, "path"),
+        (NativeBackendSource::SourceCheckout, "source"),
+        (NativeBackendSource::ManifestV1, "v1"),
+        (NativeBackendSource::ContentPluginDiscovery, "content"),
+    ] {
+        let ok = refuse_native_backend_source(src).is_err();
+        asserts.push(assert_row(
+            &format!("refuse_{label}"),
+            if ok { "PASS" } else { "FAIL" },
+            label,
+        ));
+        if !ok {
+            return finish(FinishInput {
+                cli,
+                root,
+                record_raw,
+                cmds,
+                asserts,
+                status: "REJECTED",
+                assertion_ids: &[],
+            });
+        }
+    }
+
+    let native = BackendRegistry::native_only();
+    if !native.native().selectable || native.list().len() != 1 {
+        asserts.push(assert_row("native_fallback", "FAIL", "native-only broken"));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row("native_fallback", "PASS", "native-only intact"));
+
+    cmds.push(cmd_row(
+        &["orca-todo-verify", "t11-failure", "guards"],
+        root,
+        0,
+        "ok",
+        "",
+    ));
+    asserts.push(assert_row(
+        "T11-FAILURE-GUARDS",
+        "PASS",
+        "forged/missing/corrupt/path/target/owner/duplicate/PATH-only fail closed",
+    ));
+    finish(FinishInput {
+        cli,
+        root,
+        record_raw,
+        cmds,
+        asserts,
+        status: "APPROVED",
+        assertion_ids: &["T11-FAILURE-GUARDS"],
     })
 }
 

@@ -3,25 +3,32 @@
   "todo": 11,
   "role": "orca",
   "title": "Register native and installed backends",
-  "status": "frozen-record",
+  "status": "live",
   "happy": {
     "assertionId": "T11-HAPPY",
     "action": {
-      "kind": "deferred",
+      "kind": "backend_registry_discover",
       "subject": "task-11"
     },
     "checks": [
-      "owned_by_later_task"
+      "native_always_registered",
+      "two_validated_receipt_versions",
+      "status_surface_no_spawn",
+      "content_plugin_discovery_separate"
     ]
   },
   "failure": {
     "assertionId": "T11-FAILURE-GUARDS",
     "fixtures": [
-      {
-        "id": "deferred",
-        "expect": "product_validation_deferred"
-      }
+      { "id": "forged_receipt", "expect": "ForgedRow" },
+      { "id": "missing_receipt", "expect": "MissingReceipt" },
+      { "id": "corrupt_receipt", "expect": "JsonOrCorrupt" },
+      { "id": "path_drift", "expect": "PathOwner" },
+      { "id": "target_drift", "expect": "IncompatibleNotSelectable" },
+      { "id": "owner_drift", "expect": "PathOwner" },
+      { "id": "duplicate_id", "expect": "SourceQualifiedConflict" },
+      { "id": "path_only", "expect": "PathOnlyExecutable" }
     ]
   },
-  "note": "Product implementation is Task 11. This record is frozen by Task 2."
+  "note": "Task 11 live ORCA_QA — installed backend registry and generic discovery."
 }

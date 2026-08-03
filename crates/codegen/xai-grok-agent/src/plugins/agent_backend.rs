@@ -282,7 +282,9 @@ pub fn parse_agent_backend(value: &serde_json::Value) -> Result<AgentBackendV1, 
             if let Some(ep) = t.get("entrypoint") {
                 if let Some(argv) = ep.get("argv") {
                     if argv.is_string() {
-                        return Err(AgentBackendError::ShellText(argv.as_str().unwrap_or("").into()));
+                        return Err(AgentBackendError::ShellText(
+                            argv.as_str().unwrap_or("").into(),
+                        ));
                     }
                     if !argv.is_array() {
                         return Err(AgentBackendError::ArgvNotArray);
@@ -291,8 +293,8 @@ pub fn parse_agent_backend(value: &serde_json::Value) -> Result<AgentBackendV1, 
             }
         }
     }
-    let backend: AgentBackendV1 =
-        serde_json::from_value(value.clone()).map_err(|e| AgentBackendError::Json(e.to_string()))?;
+    let backend: AgentBackendV1 = serde_json::from_value(value.clone())
+        .map_err(|e| AgentBackendError::Json(e.to_string()))?;
     validate_backend(&backend)?;
     Ok(backend)
 }
@@ -414,7 +416,10 @@ fn validate_daemon(d: &BackendDaemon) -> Result<(), AgentBackendError> {
     match d.mode.as_str() {
         "sharedPerVersion" | "perSession" => {}
         other => {
-            return Err(AgentBackendError::UnsupportedEnum("daemon.mode", other.into()));
+            return Err(AgentBackendError::UnsupportedEnum(
+                "daemon.mode",
+                other.into(),
+            ));
         }
     }
     match d.background_work.as_str() {
@@ -523,8 +528,9 @@ fn validate_lifecycle(lc: &BackendLifecycle) -> Result<(), AgentBackendError> {
         },
     )?;
     // provisionInput mandatory exactly once in provision
-    count_placeholder(&lc.provision.argv, "{provisionInput}")
-        .map_err(|_| AgentBackendError::MissingPlaceholder("{provisionInput}", "lifecycle.provision"))?;
+    count_placeholder(&lc.provision.argv, "{provisionInput}").map_err(|_| {
+        AgentBackendError::MissingPlaceholder("{provisionInput}", "lifecycle.provision")
+    })?;
     let n = lc
         .provision
         .argv
@@ -625,7 +631,10 @@ fn validate_argv(
         require_once(argv, "{runtimeDir}", where_)?;
     }
     if !rules.allow_provision_input {
-        let n = argv.iter().filter(|a| a.as_str() == "{provisionInput}").count();
+        let n = argv
+            .iter()
+            .filter(|a| a.as_str() == "{provisionInput}")
+            .count();
         if n > 0 {
             return Err(AgentBackendError::ForbiddenPlaceholder(
                 "{provisionInput}",
@@ -636,7 +645,11 @@ fn validate_argv(
     Ok(())
 }
 
-fn require_once(argv: &[String], ph: &'static str, where_: &'static str) -> Result<(), AgentBackendError> {
+fn require_once(
+    argv: &[String],
+    ph: &'static str,
+    where_: &'static str,
+) -> Result<(), AgentBackendError> {
     let n = argv.iter().filter(|a| a.as_str() == ph).count();
     match n {
         0 => Err(AgentBackendError::MissingPlaceholder(ph, where_)),
@@ -750,10 +763,12 @@ pub fn contained_rel_path(p: &str) -> Result<(), AgentBackendError> {
         return Err(AgentBackendError::PathEscape(p.into()));
     }
     let path = Path::new(p);
-    if path
-        .components()
-        .any(|c| matches!(c, Component::ParentDir | Component::RootDir | Component::Prefix(_)))
-    {
+    if path.components().any(|c| {
+        matches!(
+            c,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        )
+    }) {
         return Err(AgentBackendError::PathEscape(p.into()));
     }
     Ok(())
@@ -823,17 +838,21 @@ pub fn select_target<'a>(
     arch: &str,
     libc: Option<&str>,
 ) -> Result<&'a BackendTarget, AgentBackendError> {
+    let host = HostPlatform {
+        os: normalize_os(os),
+        arch: normalize_arch(arch),
+        libc: libc.map(str::to_string),
+    };
     let matches: Vec<_> = backend
         .targets
         .iter()
         .filter(|t| {
-            t.os == os
-                && t.arch == arch
-                && match (&t.libc, libc) {
-                    (None, _) => true,
-                    (Some(a), Some(b)) => a == b,
-                    (Some(_), None) => false,
-                }
+            let tplat = HostPlatform {
+                os: normalize_os(&t.os),
+                arch: normalize_arch(&t.arch),
+                libc: t.libc.clone(),
+            };
+            target_matches_host(&host, &tplat)
         })
         .collect();
     match matches.as_slice() {
@@ -846,6 +865,122 @@ pub fn select_target<'a>(
             arch: arch.into(),
             libc: libc.map(str::to_string),
         }),
+    }
+}
+
+// ── Host platform + native-source gate (Task 11) ─────────────────────
+
+/// Host OS/arch/libc used for receipt target compatibility.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostPlatform {
+    pub os: String,
+    pub arch: String,
+    pub libc: Option<String>,
+}
+
+impl HostPlatform {
+    /// Current process platform (`std::env::consts`), arch/os-normalized.
+    pub fn current() -> Self {
+        Self {
+            os: normalize_os(std::env::consts::OS),
+            arch: normalize_arch(std::env::consts::ARCH),
+            libc: current_libc_hint(),
+        }
+    }
+}
+
+/// Where a native backend registration was attempted from.
+///
+/// Only [`NativeBackendSource::InstallReceiptV2`] is legal. All other sources
+/// are refused so project trees, PATH lookups, source checkouts, and v1
+/// manifests cannot register native code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeBackendSource {
+    InstallReceiptV2,
+    ProjectTree,
+    PathLookup,
+    SourceCheckout,
+    ManifestV1,
+    ContentPluginDiscovery,
+}
+
+/// Ok only for validated v2 install receipts; Err echoes the refused source.
+pub fn refuse_native_backend_source(
+    source: NativeBackendSource,
+) -> Result<(), NativeBackendSource> {
+    match source {
+        NativeBackendSource::InstallReceiptV2 => Ok(()),
+        other => Err(other),
+    }
+}
+
+/// Normalize arch aliases (`amd64`↔`x86_64`, `arm64`↔`aarch64`).
+pub fn normalize_arch(arch: &str) -> String {
+    match arch {
+        "amd64" | "x86_64" => "x86_64".into(),
+        "arm64" | "aarch64" => "aarch64".into(),
+        other => other.into(),
+    }
+}
+
+/// Normalize OS aliases (`macos`/`osx` → `darwin`).
+pub fn normalize_os(os: &str) -> String {
+    match os {
+        "macos" | "osx" => "darwin".into(),
+        other => other.into(),
+    }
+}
+
+/// Parse receipt/catalog target labels: `darwin-aarch64`, `linux-amd64`, `linux-x86_64-gnu`.
+pub fn parse_target_label(label: &str) -> Result<HostPlatform, String> {
+    let parts: Vec<&str> = label.split('-').collect();
+    match parts.as_slice() {
+        [os, arch] => Ok(HostPlatform {
+            os: normalize_os(os),
+            arch: normalize_arch(arch),
+            libc: None,
+        }),
+        [os, arch, libc] => Ok(HostPlatform {
+            os: normalize_os(os),
+            arch: normalize_arch(arch),
+            libc: Some((*libc).into()),
+        }),
+        _ => Err(format!("expected os-arch[-libc], got {label:?}")),
+    }
+}
+
+/// Stable label for diagnostics (`darwin-aarch64`, `linux-x86_64-gnu`).
+pub fn host_platform_label(host: &HostPlatform) -> String {
+    let os = normalize_os(&host.os);
+    let arch = normalize_arch(&host.arch);
+    match &host.libc {
+        Some(libc) => format!("{os}-{arch}-{libc}"),
+        None => format!("{os}-{arch}"),
+    }
+}
+
+/// Whether a parsed target is compatible with the host platform.
+pub fn target_matches_host(host: &HostPlatform, target: &HostPlatform) -> bool {
+    if normalize_os(&host.os) != normalize_os(&target.os) {
+        return false;
+    }
+    if normalize_arch(&host.arch) != normalize_arch(&target.arch) {
+        return false;
+    }
+    match (&target.libc, &host.libc) {
+        (None, _) => true,
+        (Some(t), Some(h)) => t == h,
+        (Some(_), None) => false,
+    }
+}
+
+fn current_libc_hint() -> Option<String> {
+    // Advertised targets are darwin-aarch64 (no libc) and linux-amd64.
+    // On linux default to gnu when unset; darwin has no libc component.
+    if std::env::consts::OS == "linux" {
+        Some("gnu".into())
+    } else {
+        None
     }
 }
 
@@ -872,5 +1007,21 @@ mod unit_tests {
         assert!(has_shell_meta("a && b"));
         assert!(!has_shell_meta("{bridge}"));
         assert!(!has_shell_meta("--json"));
+    }
+
+    #[test]
+    fn target_label_amd64_matches_x86_64_host() {
+        let host = HostPlatform {
+            os: "linux".into(),
+            arch: "x86_64".into(),
+            libc: Some("gnu".into()),
+        };
+        let t = parse_target_label("linux-amd64").unwrap();
+        assert!(target_matches_host(&host, &t));
+        assert!(refuse_native_backend_source(NativeBackendSource::InstallReceiptV2).is_ok());
+        assert!(refuse_native_backend_source(NativeBackendSource::PathLookup).is_err());
+        assert!(refuse_native_backend_source(NativeBackendSource::ProjectTree).is_err());
+        assert!(refuse_native_backend_source(NativeBackendSource::ManifestV1).is_err());
+        assert!(refuse_native_backend_source(NativeBackendSource::SourceCheckout).is_err());
     }
 }

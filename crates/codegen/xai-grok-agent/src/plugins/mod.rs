@@ -23,12 +23,15 @@ pub mod registry;
 pub mod trust;
 
 pub use agent_backend::{
-    AgentBackendError, AgentBackendV1, ResolveContext, ResolvedArgv, parse_agent_backend,
-    resolve_argv, select_target, validate_backends,
+    AgentBackendError, AgentBackendV1, HostPlatform, NativeBackendSource, ResolveContext,
+    ResolvedArgv, host_platform_label, normalize_arch, normalize_os, parse_agent_backend,
+    parse_target_label, refuse_native_backend_source, resolve_argv, select_target,
+    target_matches_host, validate_backends,
 };
 pub use discovery::{
-    DiscoveredPlugin, PluginOrigin, PluginScope, discover_plugins, project_plugin_dirs,
-    project_plugin_dirs_in,
+    DiscoveredPlugin, PluginOrigin, PluginScope,
+    content_plugins_exclude_native_backend_registration, discover_plugins, project_plugin_dirs,
+    project_plugin_dirs_in, refuse_backend_registration_from_content_plugin,
 };
 pub use hooks_adapter::parse_plugin_hooks;
 pub use install_registry::InstallRegistry;
