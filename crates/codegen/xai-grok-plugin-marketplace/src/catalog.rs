@@ -13,10 +13,18 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use serde::Deserialize;
-use xai_hooks_plugins_types::PluginComponents;
+use xai_hooks_plugins_types::{
+    AgentBackendCatalogItem, AgentBackendTargetSummary, PluginComponents,
+};
 
 /// Catalog format version this client understands.
 const SUPPORTED_VERSION: u64 = 1;
+
+/// Hard cap on catalog file size (bytes). Oversized indexes isolate the source.
+pub const MAX_CATALOG_BYTES: u64 = 2 * 1024 * 1024;
+
+/// Max plugins accepted from one catalog file.
+pub const MAX_CATALOG_PLUGINS: usize = 512;
 
 /// Top-level `plugin-index.json` catalog, keyed by index plugin name.
 #[derive(Debug, Clone, Deserialize)]
@@ -28,12 +36,160 @@ pub struct PluginCatalog {
 
 /// Per-plugin catalog entry.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CatalogEntry {
     /// Commit the components were extracted from (required for URL-sourced
     /// entries; optional for in-repo plugins).
     #[serde(default)]
     pub sha: Option<String>,
+    #[serde(default)]
     pub components: PluginComponents,
+    /// Native backend summaries — presentation only, never install authority.
+    #[serde(default, deserialize_with = "deserialize_agent_backends")]
+    pub agent_backends: Vec<AgentBackendCatalogItem>,
+}
+
+/// Wire shape accepts nested `requires` / `artifact` objects from fixtures.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawBackend {
+    id: String,
+    #[serde(default)]
+    display_name: Option<String>,
+    #[serde(default)]
+    version: Option<String>,
+    #[serde(default)]
+    requires: Option<RawRequires>,
+    #[serde(default)]
+    requires_orca: Option<String>,
+    #[serde(default)]
+    requires_acp: Option<String>,
+    #[serde(default)]
+    targets: Vec<RawTarget>,
+    #[serde(default)]
+    permissions: Vec<String>,
+    #[serde(default)]
+    discloses_native_code: bool,
+    #[serde(default)]
+    install_authority: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawRequires {
+    #[serde(default)]
+    orca: Option<String>,
+    #[serde(default)]
+    acp: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawTarget {
+    os: String,
+    arch: String,
+    #[serde(default)]
+    libc: Option<String>,
+    #[serde(default)]
+    artifact: Option<RawArtifact>,
+    #[serde(default)]
+    artifact_sha256: Option<String>,
+    #[serde(default)]
+    media_type: Option<String>,
+    #[serde(default)]
+    has_signature: bool,
+    #[serde(default)]
+    has_provenance: bool,
+    #[serde(default)]
+    has_sbom: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawArtifact {
+    #[serde(default)]
+    sha256: Option<String>,
+    #[serde(default)]
+    media_type: Option<String>,
+    #[serde(default)]
+    has_signature: bool,
+    #[serde(default)]
+    has_provenance: bool,
+    #[serde(default)]
+    has_sbom: bool,
+}
+
+fn deserialize_agent_backends<'de, D>(
+    deserializer: D,
+) -> Result<Vec<AgentBackendCatalogItem>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw: Vec<RawBackend> = Vec::deserialize(deserializer)?;
+    Ok(raw.into_iter().map(raw_backend_to_item).collect())
+}
+
+fn raw_backend_to_item(raw: RawBackend) -> AgentBackendCatalogItem {
+    let requires_orca = raw
+        .requires_orca
+        .or_else(|| raw.requires.as_ref().and_then(|r| r.orca.clone()));
+    let requires_acp = raw
+        .requires_acp
+        .or_else(|| raw.requires.as_ref().and_then(|r| r.acp.clone()));
+    let targets = raw
+        .targets
+        .into_iter()
+        .map(|t| {
+            let (sha, media, sig, prov, sbom) = if let Some(a) = t.artifact {
+                (
+                    a.sha256.or(t.artifact_sha256),
+                    a.media_type.or(t.media_type),
+                    a.has_signature || t.has_signature,
+                    a.has_provenance || t.has_provenance,
+                    a.has_sbom || t.has_sbom,
+                )
+            } else {
+                (
+                    t.artifact_sha256,
+                    t.media_type,
+                    t.has_signature,
+                    t.has_provenance,
+                    t.has_sbom,
+                )
+            };
+            AgentBackendTargetSummary {
+                os: t.os,
+                arch: t.arch,
+                libc: t.libc,
+                artifact_sha256: sha,
+                media_type: media,
+                has_signature: sig,
+                has_provenance: prov,
+                has_sbom: sbom,
+            }
+        })
+        .collect();
+    AgentBackendCatalogItem {
+        id: raw.id,
+        display_name: raw.display_name,
+        version: raw.version,
+        requires_orca,
+        requires_acp,
+        targets,
+        permissions: raw.permissions,
+        discloses_native_code: raw.discloses_native_code,
+        install_authority: raw.install_authority,
+    }
+}
+
+/// Why catalog load failed (isolated; listing continues for other sources).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CatalogLoadError {
+    Missing,
+    Oversized { bytes: u64 },
+    Malformed(String),
+    UnsupportedVersion(u64),
+    Io(String),
 }
 
 impl PluginCatalog {
@@ -45,6 +201,29 @@ impl PluginCatalog {
         index_name: &str,
         index_sha: Option<&str>,
     ) -> Option<&PluginComponents> {
+        let entry = self.entry_if_sha_ok(index_name, index_sha)?;
+        Some(&entry.components)
+    }
+
+    /// Backend catalog summaries for an index entry (never install authority).
+    pub fn agent_backends_for(
+        &self,
+        index_name: &str,
+        index_sha: Option<&str>,
+    ) -> Option<&[AgentBackendCatalogItem]> {
+        let entry = self.entry_if_sha_ok(index_name, index_sha)?;
+        if entry.agent_backends.is_empty() {
+            None
+        } else {
+            Some(entry.agent_backends.as_slice())
+        }
+    }
+
+    fn entry_if_sha_ok(
+        &self,
+        index_name: &str,
+        index_sha: Option<&str>,
+    ) -> Option<&CatalogEntry> {
         let entry = self.plugins.get(index_name)?;
         if let Some(expected) = index_sha
             && entry.sha.as_deref() != Some(expected)
@@ -57,7 +236,7 @@ impl PluginCatalog {
             );
             return None;
         }
-        Some(&entry.components)
+        Some(entry)
     }
 }
 
@@ -65,6 +244,18 @@ impl PluginCatalog {
 /// malformed, or of an unsupported version. A missing file falls through to
 /// the next candidate directory; a broken one does not (see module docs).
 pub fn load_catalog(marketplace_root: &Path) -> Option<PluginCatalog> {
+    match load_catalog_detailed(marketplace_root) {
+        Ok(c) => Some(c),
+        Err(CatalogLoadError::Missing) => None,
+        Err(e) => {
+            tracing::warn!("marketplace catalog load failed: {e:?}");
+            None
+        }
+    }
+}
+
+/// Load catalog with typed failure reason (oversized / malformed / missing).
+pub fn load_catalog_detailed(marketplace_root: &Path) -> Result<PluginCatalog, CatalogLoadError> {
     let candidates = [
         marketplace_root
             .join(".grok-plugin")
@@ -74,35 +265,55 @@ pub fn load_catalog(marketplace_root: &Path) -> Option<PluginCatalog> {
             .join("plugin-index.json"),
     ];
     for path in &candidates {
-        let content = match std::fs::read_to_string(path) {
-            Ok(content) => content,
+        let meta = match std::fs::metadata(path) {
+            Ok(m) => m,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
             Err(e) => {
-                tracing::warn!("failed to read {}: {e}", path.display());
-                return None;
+                return Err(CatalogLoadError::Io(format!("{}: {e}", path.display())));
             }
         };
-        let mut catalog: PluginCatalog = match serde_json::from_str(&content) {
-            Ok(catalog) => catalog,
+        let bytes = meta.len();
+        if bytes > MAX_CATALOG_BYTES {
+            return Err(CatalogLoadError::Oversized { bytes });
+        }
+        let content = match std::fs::read_to_string(path) {
+            Ok(content) => content,
             Err(e) => {
-                tracing::warn!("failed to parse {}: {e}", path.display());
-                return None;
+                return Err(CatalogLoadError::Io(format!("{}: {e}", path.display())));
             }
         };
-        if catalog.version != SUPPORTED_VERSION {
-            tracing::warn!(
-                "unsupported plugin catalog version {} in {}",
-                catalog.version,
-                path.display()
-            );
-            return None;
-        }
-        for entry in catalog.plugins.values_mut() {
-            entry.components.sanitize();
-        }
-        return Some(catalog);
+        return parse_catalog_json(&content);
     }
-    None
+    Err(CatalogLoadError::Missing)
+}
+
+/// Parse catalog JSON bytes (used by fixtures and loaders).
+pub fn parse_catalog_json(content: &str) -> Result<PluginCatalog, CatalogLoadError> {
+    if content.len() as u64 > MAX_CATALOG_BYTES {
+        return Err(CatalogLoadError::Oversized {
+            bytes: content.len() as u64,
+        });
+    }
+    let mut catalog: PluginCatalog = serde_json::from_str(content)
+        .map_err(|e| CatalogLoadError::Malformed(e.to_string()))?;
+    if catalog.version != SUPPORTED_VERSION {
+        return Err(CatalogLoadError::UnsupportedVersion(catalog.version));
+    }
+    if catalog.plugins.len() > MAX_CATALOG_PLUGINS {
+        return Err(CatalogLoadError::Malformed(format!(
+            "too many plugins: {} > {MAX_CATALOG_PLUGINS}",
+            catalog.plugins.len()
+        )));
+    }
+    for entry in catalog.plugins.values_mut() {
+        entry.components.sanitize();
+        entry.agent_backends.truncate(16);
+        entry.agent_backends.retain_mut(|b| {
+            b.sanitize();
+            AgentBackendCatalogItem::is_valid_id(&b.id)
+        });
+    }
+    Ok(catalog)
 }
 
 #[cfg(test)]
