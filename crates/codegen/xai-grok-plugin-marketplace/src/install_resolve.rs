@@ -1,6 +1,11 @@
-//! Pure resolution logic for `grok plugin install <name>` marketplace refs.
+//! Pure resolution logic for marketplace refs, source CRUD, and catalog search.
+//!
+//! // allow: SIZE_OK — plan Task 5 owns install_resolve.rs for source + bare/qualified resolve
 
-use crate::types::{MarketplaceEntry, MarketplaceSource, SourceKind};
+use crate::types::{
+    CatalogListResult, CatalogListingEntry, InstalledDependent, MarketplaceEntry,
+    MarketplaceSource, SourceIdentity, SourceKind, SourceListError, SourceStatus,
+};
 use crate::{canonical_github_owner_repo, is_official_source_url};
 
 /// A parsed marketplace install ref: a plugin `name` with an optional source
@@ -155,6 +160,328 @@ pub enum BareNameError {
     },
 }
 
+// ── Source registry (add / list / remove / refresh) ─────────────────
+
+/// In-memory source registry with canonical identity dedup.
+#[derive(Debug, Clone, Default)]
+pub struct SourceRegistry {
+    sources: Vec<MarketplaceSource>,
+}
+
+/// Typed source-management failures.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SourceManageError {
+    EmptyInput,
+    DuplicateIdentity { identity: String, existing_name: String },
+    AliasConflict { identity: String, existing_name: String },
+    NotFound { input: String },
+    AmbiguousName { name: String, identities: Vec<String> },
+    HasInstalledDependents { dependents: Vec<InstalledDependent> },
+}
+
+impl std::fmt::Display for SourceManageError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EmptyInput => f.write_str("source input is empty"),
+            Self::DuplicateIdentity {
+                identity,
+                existing_name,
+            } => write!(
+                f,
+                "duplicate source identity {identity} (already registered as {existing_name})"
+            ),
+            Self::AliasConflict {
+                identity,
+                existing_name,
+            } => write!(
+                f,
+                "alias conflict for {identity} (already registered as {existing_name})"
+            ),
+            Self::NotFound { input } => write!(f, "source not found: {input}"),
+            Self::AmbiguousName { name, identities } => write!(
+                f,
+                "ambiguous source name {name}; candidates: {}",
+                identities.join(", ")
+            ),
+            Self::HasInstalledDependents { dependents } => {
+                let names: Vec<_> = dependents
+                    .iter()
+                    .map(|d| d.plugin_name.as_str())
+                    .collect();
+                write!(
+                    f,
+                    "cannot remove source: installed dependents: {}",
+                    names.join(", ")
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for SourceManageError {}
+
+impl SourceRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn from_sources(sources: Vec<MarketplaceSource>) -> Result<Self, SourceManageError> {
+        let mut reg = Self::new();
+        for s in sources {
+            reg.add(s)?;
+        }
+        Ok(reg)
+    }
+
+    pub fn list(&self) -> &[MarketplaceSource] {
+        &self.sources
+    }
+
+    pub fn identities(&self) -> Vec<SourceIdentity> {
+        self.sources
+            .iter()
+            .map(SourceIdentity::from_source)
+            .collect()
+    }
+
+    /// Add a source. Rejects duplicate/alias identities.
+    pub fn add(&mut self, source: MarketplaceSource) -> Result<SourceIdentity, SourceManageError> {
+        if source.name.trim().is_empty() {
+            return Err(SourceManageError::EmptyInput);
+        }
+        let identity = SourceIdentity::from_source(&source);
+        for existing in &self.sources {
+            let existing_id = SourceIdentity::from_source(existing);
+            if existing_id == identity {
+                return Err(SourceManageError::DuplicateIdentity {
+                    identity: identity.to_string(),
+                    existing_name: existing.name.clone(),
+                });
+            }
+            // Same display name with different identity is an alias conflict.
+            if existing.name == source.name {
+                return Err(SourceManageError::AliasConflict {
+                    identity: identity.to_string(),
+                    existing_name: existing.name.clone(),
+                });
+            }
+        }
+        self.sources.push(source);
+        Ok(identity)
+    }
+
+    /// Resolve remove input (name, identity, or git/local string) to one source.
+    pub fn find(&self, input: &str) -> Result<&MarketplaceSource, SourceManageError> {
+        let input = input.trim();
+        if input.is_empty() {
+            return Err(SourceManageError::EmptyInput);
+        }
+        let by_name: Vec<_> = self.sources.iter().filter(|s| s.name == input).collect();
+        match by_name.as_slice() {
+            [one] => return Ok(one),
+            [] => {}
+            many => {
+                return Err(SourceManageError::AmbiguousName {
+                    name: input.to_string(),
+                    identities: many
+                        .iter()
+                        .map(|s| SourceIdentity::from_source(s).to_string())
+                        .collect(),
+                });
+            }
+        }
+        let want = SourceIdentity::parse_user_input(input);
+        self.sources
+            .iter()
+            .find(|s| SourceIdentity::from_source(s) == want)
+            .ok_or_else(|| SourceManageError::NotFound {
+                input: input.to_string(),
+            })
+    }
+
+    /// Remove a source only when no installed dependents remain.
+    pub fn remove(
+        &mut self,
+        input: &str,
+        installed: &[InstalledDependent],
+    ) -> Result<MarketplaceSource, SourceManageError> {
+        let identity = {
+            let src = self.find(input)?;
+            SourceIdentity::from_source(src)
+        };
+        let dependents: Vec<_> = installed
+            .iter()
+            .filter(|d| {
+                d.source_identity == identity.as_str()
+                    || SourceIdentity::from_git_url(&d.source_identity) == identity
+                    || SourceIdentity::from_local_path(std::path::Path::new(&d.source_identity))
+                        == identity
+            })
+            .cloned()
+            .collect();
+        if !dependents.is_empty() {
+            return Err(SourceManageError::HasInstalledDependents { dependents });
+        }
+        let idx = self
+            .sources
+            .iter()
+            .position(|s| SourceIdentity::from_source(s) == identity)
+            .ok_or_else(|| SourceManageError::NotFound {
+                input: input.to_string(),
+            })?;
+        Ok(self.sources.remove(idx))
+    }
+
+    /// Refresh is a no-op marker for local sources; git refresh is explicit
+    /// and never runs during list/search/details.
+    pub fn refresh_plan(&self, input: Option<&str>) -> Result<Vec<SourceIdentity>, SourceManageError> {
+        match input {
+            None => Ok(self.identities()),
+            Some(i) => {
+                let s = self.find(i)?;
+                Ok(vec![SourceIdentity::from_source(s)])
+            }
+        }
+    }
+}
+
+/// Build catalog listings from already-scanned entries (no download/execute).
+pub fn listings_from_scan(
+    source: &MarketplaceSource,
+    entries: &[MarketplaceEntry],
+    status: SourceStatus,
+) -> Vec<CatalogListingEntry> {
+    let identity = SourceIdentity::from_source(source);
+    let qualifier = addressable_qualifier(source);
+    entries
+        .iter()
+        .map(|e| CatalogListingEntry {
+            name: e.name.clone(),
+            source_name: source.name.clone(),
+            source_identity: identity.to_string(),
+            qualified_name: format!("{}@{qualifier}", e.name),
+            version: e.version.clone(),
+            description: e.description.clone(),
+            category: e.category.clone(),
+            tags: e.tags.clone(),
+            agent_backends: e.agent_backends.clone(),
+            source_status: status,
+        })
+        .collect()
+}
+
+/// Bounded case-insensitive search over listing entries.
+pub fn search_listings(entries: &[CatalogListingEntry], query: &str) -> Vec<CatalogListingEntry> {
+    let q = query.trim().to_ascii_lowercase();
+    if q.is_empty() {
+        return entries.to_vec();
+    }
+    entries
+        .iter()
+        .filter(|e| {
+            e.name.to_ascii_lowercase().contains(&q)
+                || e.qualified_name.to_ascii_lowercase().contains(&q)
+                || e.description
+                    .as_ref()
+                    .is_some_and(|d| d.to_ascii_lowercase().contains(&q))
+                || e.tags
+                    .iter()
+                    .any(|t| t.to_ascii_lowercase().contains(&q))
+                || e.agent_backends.iter().any(|b| {
+                    b.id.to_ascii_lowercase().contains(&q)
+                        || b.display_name
+                            .as_ref()
+                            .is_some_and(|n| n.to_ascii_lowercase().contains(&q))
+                })
+        })
+        .cloned()
+        .collect()
+}
+
+/// Filter listings that advertise a matching target os/arch.
+pub fn filter_by_target(
+    entries: &[CatalogListingEntry],
+    os: &str,
+    arch: &str,
+) -> Vec<CatalogListingEntry> {
+    let os = os.to_ascii_lowercase();
+    let arch = arch.to_ascii_lowercase();
+    entries
+        .iter()
+        .filter(|e| {
+            if e.agent_backends.is_empty() {
+                return true;
+            }
+            e.agent_backends.iter().any(|b| {
+                b.targets.iter().any(|t| {
+                    t.os.eq_ignore_ascii_case(&os) && t.arch.eq_ignore_ascii_case(&arch)
+                })
+            })
+        })
+        .cloned()
+        .collect()
+}
+
+/// Details for a bare or qualified plugin name.
+#[derive(Debug, Clone)]
+pub enum DetailsError {
+    NotFound,
+    Ambiguous(Vec<String>),
+}
+
+pub fn details_for(
+    entries: &[CatalogListingEntry],
+    name_or_qualified: &str,
+) -> Result<CatalogListingEntry, DetailsError> {
+    let input = name_or_qualified.trim();
+    if let Some((name, qual)) = input.split_once('@') {
+        let matched: Vec<_> = entries
+            .iter()
+            .filter(|e| {
+                e.name.eq_ignore_ascii_case(name)
+                    && (e.source_identity == qual
+                        || e.qualified_name.eq_ignore_ascii_case(input)
+                        || e.source_name.eq_ignore_ascii_case(qual)
+                        || e.qualified_name.ends_with(&format!("@{qual}")))
+            })
+            .cloned()
+            .collect();
+        return match matched.as_slice() {
+            [] => Err(DetailsError::NotFound),
+            [one] => Ok(one.clone()),
+            many => Err(DetailsError::Ambiguous(
+                many.iter().map(|e| e.qualified_name.clone()).collect(),
+            )),
+        };
+    }
+    let matched: Vec<_> = entries
+        .iter()
+        .filter(|e| e.name.eq_ignore_ascii_case(input))
+        .cloned()
+        .collect();
+    match matched.as_slice() {
+        [] => Err(DetailsError::NotFound),
+        [one] => Ok(one.clone()),
+        many => Err(DetailsError::Ambiguous(
+            many.iter().map(|e| e.qualified_name.clone()).collect(),
+        )),
+    }
+}
+
+/// Merge per-source listing results, isolating errors.
+pub fn merge_catalog_lists(
+    parts: impl IntoIterator<Item = Result<Vec<CatalogListingEntry>, SourceListError>>,
+) -> CatalogListResult {
+    let mut result = CatalogListResult::default();
+    for part in parts {
+        match part {
+            Ok(entries) => result.entries.extend(entries),
+            Err(e) => result.source_errors.push(e),
+        }
+    }
+    result
+}
+
 /// Choose which scanned entry to install for a bare `<name>` (case-insensitive).
 ///
 /// One match wins outright. With several matches, a single official-source copy
@@ -241,6 +568,7 @@ mod tests {
             remote_sha: None,
             remote_subdir: None,
             components: None,
+            agent_backends: Vec::new(),
         }
     }
 
