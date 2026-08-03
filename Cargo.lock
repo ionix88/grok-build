@@ -13516,6 +13516,7 @@ dependencies = [
  "xai-grok-config",
  "xai-grok-pager",
  "xai-grok-pager-minimal",
+ "xai-grok-plugin-marketplace",
  "xai-grok-sandbox",
  "xai-grok-shell",
  "xai-grok-telemetry",

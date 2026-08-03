@@ -48,7 +48,7 @@ fn run(args: Vec<String>) -> Result<u8, String> {
     let record: serde_json::Value =
         serde_json::from_slice(&record_raw).map_err(|e| format!("parse record: {e}"))?;
     let status = record.get("status").and_then(|v| v.as_str()).unwrap_or("");
-    if status == "frozen-record" && !matches!(cli.todo, 2 | 3 | 4) {
+    if status == "frozen-record" && !matches!(cli.todo, 2 | 3 | 4 | 5) {
         return write_frozen_only(&cli, &root, &record_raw, &record);
     }
     match (cli.todo, cli.mode) {
@@ -58,6 +58,8 @@ fn run(args: Vec<String>) -> Result<u8, String> {
         (3, Mode::Failure) => run_todo3_failure(&cli, &root, &record_raw, &record),
         (4, Mode::Happy) => run_todo4_happy(&cli, &root, &record_raw, &record),
         (4, Mode::Failure) => run_todo4_failure(&cli, &root, &record_raw, &record),
+        (5, Mode::Happy) => run_todo5_happy(&cli, &root, &record_raw, &record),
+        (5, Mode::Failure) => run_todo5_failure(&cli, &root, &record_raw, &record),
         (n, _) => Err(format!("todo {n} has no live runner yet")),
     }
 }
@@ -841,6 +843,496 @@ fn run_todo4_failure(
             asserts,
             status: "APPROVED",
             assertion_ids: &["T04-FAILURE-GUARDS"],
+        })
+    } else {
+        finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        })
+    }
+}
+
+fn run_todo5_happy(
+    cli: &Cli,
+    root: &Path,
+    record_raw: &[u8],
+    _record: &serde_json::Value,
+) -> Result<u8, String> {
+    use std::path::PathBuf;
+    use xai_grok_plugin_marketplace::catalog::parse_catalog_json;
+    use xai_grok_plugin_marketplace::install_resolve::{
+        details_for, filter_by_target, listings_from_scan, merge_catalog_lists, search_listings,
+        select_bare_name, BareNameError, ScannedEntry, SourceRegistry,
+    };
+    use xai_grok_plugin_marketplace::types::{
+        MarketplaceEntry, MarketplaceSource, SourceKind, SourceStatus,
+    };
+
+    let mut cmds = Vec::new();
+    let mut asserts = Vec::new();
+    let fixture_root = root.join(
+        "crates/codegen/xai-grok-plugin-marketplace/tests/fixtures",
+    );
+    let owned = [
+        root.join("crates/codegen/xai-grok-plugin-marketplace/src/types.rs"),
+        root.join("crates/codegen/xai-grok-plugin-marketplace/src/catalog.rs"),
+        root.join("crates/codegen/xai-grok-plugin-marketplace/src/scanner.rs"),
+        root.join("crates/codegen/xai-grok-plugin-marketplace/src/install_resolve.rs"),
+        root.join("crates/codegen/xai-hooks-plugins-types/src/lib.rs"),
+        fixture_root.join("source-a.json"),
+        fixture_root.join("source-b.json"),
+        fixture_root.join("malformed.json"),
+        root.join("crates/codegen/xai-grok-plugin-marketplace/tests/backend_catalog.rs"),
+    ];
+    if owned.iter().any(|p| !p.is_file()) {
+        asserts.push(assert_row("owned_paths", "FAIL", "Task 5 owned files missing"));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row(
+        "owned_paths",
+        "PASS",
+        "marketplace + hooks types + fixtures",
+    ));
+
+    let a_raw = fs::read_to_string(fixture_root.join("source-a.json")).map_err(|e| e.to_string())?;
+    let b_raw = fs::read_to_string(fixture_root.join("source-b.json")).map_err(|e| e.to_string())?;
+    let a = parse_catalog_json(&a_raw).map_err(|e| format!("source-a: {e:?}"))?;
+    let b = parse_catalog_json(&b_raw).map_err(|e| format!("source-b: {e:?}"))?;
+
+    let root_a = PathBuf::from("/tmp/orca-qa5-source-a");
+    let root_b = PathBuf::from("/tmp/orca-qa5-source-b");
+    let src_a = MarketplaceSource {
+        name: "fixture-source-a".into(),
+        kind: SourceKind::Local { path: root_a },
+    };
+    let src_b = MarketplaceSource {
+        name: "fixture-source-b".into(),
+        kind: SourceKind::Local { path: root_b },
+    };
+
+    let mut reg = SourceRegistry::new();
+    reg.add(src_a.clone()).map_err(|e| e.to_string())?;
+    reg.add(src_b.clone()).map_err(|e| e.to_string())?;
+    if reg.list().len() != 2 {
+        asserts.push(assert_row("two_sources", "FAIL", "expected 2 sources"));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row("two_sources", "PASS", "add/list two fixture sources"));
+
+    fn entry_from(
+        name: &str,
+        cat: &xai_grok_plugin_marketplace::catalog::PluginCatalog,
+    ) -> MarketplaceEntry {
+        let backends = cat
+            .agent_backends_for(name, None)
+            .map(|b| b.to_vec())
+            .unwrap_or_default();
+        let components = cat.components_for(name, None).cloned();
+        MarketplaceEntry {
+            name: name.into(),
+            version: backends.first().and_then(|b| b.version.clone()),
+            description: None,
+            category: None,
+            author: None,
+            tags: Vec::new(),
+            keywords: Vec::new(),
+            domains: Vec::new(),
+            homepage: None,
+            relative_path: format!("plugins/{name}"),
+            skill_count: 0,
+            has_hooks: false,
+            has_agents: false,
+            has_mcp: false,
+            remote_url: None,
+            remote_ref: None,
+            remote_sha: None,
+            remote_subdir: None,
+            components,
+            agent_backends: backends,
+        }
+    }
+
+    let entries_a: Vec<_> = a.plugins.keys().map(|n| entry_from(n, &a)).collect();
+    let entries_b: Vec<_> = b.plugins.keys().map(|n| entry_from(n, &b)).collect();
+    let list = merge_catalog_lists([
+        Ok(listings_from_scan(&src_a, &entries_a, SourceStatus::Ok)),
+        Ok(listings_from_scan(&src_b, &entries_b, SourceStatus::Ok)),
+    ]);
+    if !list.source_errors.is_empty() {
+        asserts.push(assert_row("list_no_download", "FAIL", "source errors on local list"));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    let mut authority_ok = true;
+    for e in &list.entries {
+        for backend in &e.agent_backends {
+            if backend.install_authority {
+                authority_ok = false;
+            }
+        }
+    }
+    if !authority_ok {
+        asserts.push(assert_row(
+            "list_no_download",
+            "FAIL",
+            "catalog claimed install authority",
+        ));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row(
+        "list_no_download",
+        "PASS",
+        "list/search surface; install_authority=false",
+    ));
+
+    let searched = search_listings(&list.entries, "go-orca");
+    let filtered = filter_by_target(&list.entries, "darwin", "aarch64");
+    let details = details_for(&list.entries, "other-backend@local/fixture-source-b");
+    if searched.len() < 2 || filtered.is_empty() || details.is_err() {
+        asserts.push(assert_row(
+            "search_filter_details",
+            "FAIL",
+            "search/filter/details incomplete",
+        ));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    let d = details.unwrap();
+    if d.agent_backends.is_empty() || d.agent_backends[0].id != "other-backend" {
+        asserts.push(assert_row(
+            "search_filter_details",
+            "FAIL",
+            "qualified details missing backend metadata",
+        ));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row(
+        "search_filter_details",
+        "PASS",
+        "search + target filter + qualified details",
+    ));
+
+    let pairs: Vec<(MarketplaceSource, MarketplaceEntry)> = entries_a
+        .iter()
+        .map(|e| (src_a.clone(), e.clone()))
+        .chain(entries_b.iter().map(|e| (src_b.clone(), e.clone())))
+        .collect();
+    let scanned: Vec<ScannedEntry> = pairs
+        .iter()
+        .map(|(s, e)| ScannedEntry {
+            source: s,
+            entry: e,
+        })
+        .collect();
+    if !matches!(
+        select_bare_name("go-orca", &scanned),
+        Err(BareNameError::Ambiguous { .. })
+    ) {
+        asserts.push(assert_row(
+            "qualified_resolve",
+            "FAIL",
+            "bare go-orca should be ambiguous",
+        ));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row(
+        "qualified_resolve",
+        "PASS",
+        "bare ambiguous; qualified unique",
+    ));
+
+    if reg.remove("fixture-source-b", &[]).is_err() || reg.list().len() != 1 {
+        asserts.push(assert_row("remove_unused", "FAIL", "unused source remove failed"));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row("remove_unused", "PASS", "removed unused source-b"));
+
+    cmds.push(cmd_row(
+        &["orca-todo-verify", "t05-happy", "catalog-source-mgmt"],
+        root,
+        0,
+        "ok",
+        "",
+    ));
+    asserts.push(assert_row(
+        "T05-HAPPY",
+        "PASS",
+        "two sources + catalog metadata + resolve + remove",
+    ));
+    finish(FinishInput {
+        cli,
+        root,
+        record_raw,
+        cmds,
+        asserts,
+        status: "APPROVED",
+        assertion_ids: &["T05-HAPPY"],
+    })
+}
+
+fn run_todo5_failure(
+    cli: &Cli,
+    root: &Path,
+    record_raw: &[u8],
+    _record: &serde_json::Value,
+) -> Result<u8, String> {
+    use std::path::PathBuf;
+    use xai_grok_plugin_marketplace::catalog::{parse_catalog_json, CatalogLoadError, MAX_CATALOG_BYTES};
+    use xai_grok_plugin_marketplace::install_resolve::{
+        merge_catalog_lists, select_bare_name, BareNameError, ScannedEntry, SourceManageError,
+        SourceRegistry,
+    };
+    use xai_grok_plugin_marketplace::types::{
+        InstalledDependent, MarketplaceEntry, MarketplaceSource, SourceIdentity, SourceKind,
+        SourceListError, SourceStatus,
+    };
+
+    let fixtures = [
+        "alias_duplicate_source",
+        "ambiguous_name",
+        "installed_dependent",
+        "forged_target_digest",
+        "traversal",
+        "oversized_index",
+        "malformed_json",
+        "unreachable_source",
+    ];
+    if let Some(only) = &cli.inject
+        && !fixtures.contains(&only.as_str())
+    {
+        return Err(format!("unknown --inject {only}"));
+    }
+    let mut cmds = Vec::new();
+    let mut asserts = Vec::new();
+    let mut all_ok = true;
+    let fixture_root = root.join(
+        "crates/codegen/xai-grok-plugin-marketplace/tests/fixtures",
+    );
+
+    for id in fixtures {
+        if cli.inject.as_deref().is_some_and(|only| only != id) {
+            continue;
+        }
+        let rejected = match id {
+            "alias_duplicate_source" => {
+                let mut reg = SourceRegistry::new();
+                let path = PathBuf::from("/tmp/orca-qa5-dup");
+                let _ = reg.add(MarketplaceSource {
+                    name: "A".into(),
+                    kind: SourceKind::Local {
+                        path: path.clone(),
+                    },
+                });
+                matches!(
+                    reg.add(MarketplaceSource {
+                        name: "B".into(),
+                        kind: SourceKind::Local { path },
+                    }),
+                    Err(SourceManageError::DuplicateIdentity { .. })
+                )
+            }
+            "ambiguous_name" => {
+                let a = MarketplaceSource {
+                    name: "a".into(),
+                    kind: SourceKind::Local {
+                        path: PathBuf::from("/tmp/a"),
+                    },
+                };
+                let b = MarketplaceSource {
+                    name: "b".into(),
+                    kind: SourceKind::Local {
+                        path: PathBuf::from("/tmp/b"),
+                    },
+                };
+                let ea = MarketplaceEntry {
+                    name: "go-orca".into(),
+                    version: None,
+                    description: None,
+                    category: None,
+                    author: None,
+                    tags: Vec::new(),
+                    keywords: Vec::new(),
+                    domains: Vec::new(),
+                    homepage: None,
+                    relative_path: "plugins/go-orca".into(),
+                    skill_count: 0,
+                    has_hooks: false,
+                    has_agents: false,
+                    has_mcp: false,
+                    remote_url: None,
+                    remote_ref: None,
+                    remote_sha: None,
+                    remote_subdir: None,
+                    components: None,
+                    agent_backends: Vec::new(),
+                };
+                let eb = ea.clone();
+                let pairs = [(a, ea), (b, eb)];
+                let scanned: Vec<_> = pairs
+                    .iter()
+                    .map(|(s, e)| ScannedEntry {
+                        source: s,
+                        entry: e,
+                    })
+                    .collect();
+                matches!(
+                    select_bare_name("go-orca", &scanned),
+                    Err(BareNameError::Ambiguous { .. })
+                )
+            }
+            "installed_dependent" => {
+                let mut reg = SourceRegistry::new();
+                let path = PathBuf::from("/tmp/orca-qa5-dep");
+                let _ = reg.add(MarketplaceSource {
+                    name: "dep-src".into(),
+                    kind: SourceKind::Local {
+                        path: path.clone(),
+                    },
+                });
+                let id = SourceIdentity::from_local_path(&path);
+                let deps = vec![InstalledDependent {
+                    source_identity: id.to_string(),
+                    plugin_name: "go-orca".into(),
+                    version: Some("1.2.0".into()),
+                }];
+                matches!(
+                    reg.remove("dep-src", &deps),
+                    Err(SourceManageError::HasInstalledDependents { .. })
+                )
+            }
+            "forged_target_digest" | "traversal" => {
+                let raw = fs::read_to_string(fixture_root.join("malformed.json"))
+                    .map_err(|e| e.to_string())?;
+                match parse_catalog_json(&raw) {
+                    Ok(cat) => cat
+                        .agent_backends_for("bad", None)
+                        .map(|b| b.is_empty())
+                        .unwrap_or(true),
+                    Err(_) => true,
+                }
+            }
+            "oversized_index" => {
+                let huge = "x".repeat((MAX_CATALOG_BYTES as usize) + 1);
+                matches!(
+                    parse_catalog_json(&huge),
+                    Err(CatalogLoadError::Oversized { .. })
+                )
+            }
+            "malformed_json" => {
+                matches!(
+                    parse_catalog_json("not json {{{"),
+                    Err(CatalogLoadError::Malformed(_))
+                )
+            }
+            "unreachable_source" => {
+                let list = merge_catalog_lists([Err(SourceListError {
+                    source_name: "offline".into(),
+                    source_identity: "github:acme/offline".into(),
+                    status: SourceStatus::Unreachable,
+                    message: "cache miss; list does not download".into(),
+                })]);
+                list.source_errors.len() == 1
+                    && list.source_errors[0].status == SourceStatus::Unreachable
+                    && list.entries.is_empty()
+            }
+            _ => false,
+        };
+        cmds.push(cmd_row(
+            &["orca-todo-verify", "t05-fixture", id],
+            root,
+            if rejected { 0 } else { 1 },
+            if rejected { "rejected" } else { "accepted" },
+            "",
+        ));
+        if rejected {
+            asserts.push(assert_row(id, "PASS", "typed refusal / isolation"));
+        } else {
+            all_ok = false;
+            asserts.push(assert_row(id, "FAIL", "vector not refused"));
+        }
+    }
+
+    if all_ok {
+        asserts.push(assert_row(
+            "T05-FAILURE-GUARDS",
+            "PASS",
+            "all failure vectors isolated/refused",
+        ));
+        finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "APPROVED",
+            assertion_ids: &["T05-FAILURE-GUARDS"],
         })
     } else {
         finish(FinishInput {

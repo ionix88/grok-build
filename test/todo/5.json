@@ -3,25 +3,34 @@
   "todo": 5,
   "role": "orca",
   "title": "Extend marketplace catalog and source management for native backends",
-  "status": "frozen-record",
+  "status": "live",
   "happy": {
     "assertionId": "T05-HAPPY",
     "action": {
-      "kind": "deferred",
+      "kind": "marketplace-backend-catalog",
       "subject": "task-5"
     },
     "checks": [
-      "owned_by_later_task"
+      "owned_paths",
+      "two_sources",
+      "list_no_download",
+      "search_filter_details",
+      "qualified_resolve",
+      "remove_unused"
     ]
   },
   "failure": {
     "assertionId": "T05-FAILURE-GUARDS",
     "fixtures": [
-      {
-        "id": "deferred",
-        "expect": "product_validation_deferred"
-      }
+      { "id": "alias_duplicate_source", "expect": "typed_refusal" },
+      { "id": "ambiguous_name", "expect": "typed_refusal" },
+      { "id": "installed_dependent", "expect": "typed_refusal" },
+      { "id": "forged_target_digest", "expect": "typed_refusal" },
+      { "id": "traversal", "expect": "typed_refusal" },
+      { "id": "oversized_index", "expect": "typed_refusal" },
+      { "id": "malformed_json", "expect": "typed_refusal" },
+      { "id": "unreachable_source", "expect": "typed_refusal" }
     ]
   },
-  "note": "Product implementation is Task 5. This record is frozen by Task 2."
+  "note": "Live Task 5 QA: marketplace source CRUD + native backend catalog summaries (no download/execute on list)."
 }
