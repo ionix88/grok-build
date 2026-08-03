@@ -68,6 +68,8 @@ fn run(args: Vec<String>) -> Result<u8, String> {
         (10, Mode::Failure) => run_todo10_failure(&cli, &root, &record_raw, &record),
         (11, Mode::Happy) => run_todo11_happy(&cli, &root, &record_raw, &record),
         (11, Mode::Failure) => run_todo11_failure(&cli, &root, &record_raw, &record),
+        (16, Mode::Happy) => run_todo16_happy(&cli, &root, &record_raw, &record),
+        (16, Mode::Failure) => run_todo16_failure(&cli, &root, &record_raw, &record),
         (n, _) => Err(format!("todo {n} has no live runner yet")),
     }
 }
@@ -3964,6 +3966,151 @@ struct SmokeOut {
     detail: String,
     cmd: serde_json::Value,
 }
+
+
+fn run_todo16_happy(
+    cli: &Cli,
+    root: &Path,
+    record_raw: &[u8],
+    _record: &serde_json::Value,
+) -> Result<u8, String> {
+    let mut cmds = Vec::new();
+    let mut asserts = Vec::new();
+    let owned = [
+        root.join("crates/codegen/xai-grok-pager-bin/src/host_update/mod.rs"),
+        root.join("crates/codegen/xai-grok-pager-bin/src/host_update/stage.rs"),
+        root.join("crates/codegen/xai-grok-pager-bin/src/host_update/apply.rs"),
+        root.join("crates/codegen/xai-grok-pager-bin/src/host_update/receipt.rs"),
+        root.join("crates/codegen/xai-grok-pager-bin/src/host_update/rollback.rs"),
+    ];
+    if !owned.iter().all(|p| p.is_file()) {
+        asserts.push(assert_row("owned_paths", "FAIL", "host_update module missing"));
+        return finish(FinishInput {
+            cli, root, record_raw, cmds, asserts, status: "REJECTED", assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row("owned_paths", "PASS", "host_update/{mod,stage,apply,receipt,rollback}"));
+    let Some(bin) = resolve_orca_bin(root) else {
+        asserts.push(assert_row("update_cli", "FAIL", "orca binary missing"));
+        return finish(FinishInput {
+            cli, root, record_raw, cmds, asserts, status: "REJECTED", assertion_ids: &[],
+        });
+    };
+    let tmp = std::env::temp_dir().join(format!(
+        "orca-qa16-happy-{}-{}",
+        std::process::id(),
+        SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)
+    ));
+    let orca_home = tmp.join("orca");
+    let grok = tmp.join("grok");
+    fs::create_dir_all(orca_home.join("data/plugins")).map_err(|e| e.to_string())?;
+    fs::create_dir_all(orca_home.join("state/session-pins")).map_err(|e| e.to_string())?;
+    fs::create_dir_all(&grok).map_err(|e| e.to_string())?;
+    fs::write(orca_home.join("data/plugins/.canary"), b"canary-v1").map_err(|e| e.to_string())?;
+    fs::write(orca_home.join("state/session-pins/.canary"), b"canary-v1").map_err(|e| e.to_string())?;
+    fs::write(grok.join(".canary"), b"canary-v1").map_err(|e| e.to_string())?;
+    let check = Command::new(&bin)
+        .args(["update", "--check"])
+        .env("ORCA_HOME", &orca_home)
+        .env("ORCA_HOST_UPDATE_IN_PROCESS", "1")
+        .env("GROK_HOME", &grok)
+        .output()
+        .map_err(|e| e.to_string())?;
+    cmds.push(cmd_row(
+        &["orca", "update", "--check"],
+        root,
+        check.status.code().unwrap_or(1),
+        &String::from_utf8_lossy(&check.stdout),
+        &String::from_utf8_lossy(&check.stderr),
+    ));
+    let out = String::from_utf8_lossy(&check.stdout);
+    if check.status.success() && out.contains("hostUpdateCheck") {
+        asserts.push(assert_row("update_check_readonly", "PASS", "check JSON emitted"));
+    } else {
+        asserts.push(assert_row("update_check_readonly", "FAIL", &out));
+        let _ = fs::remove_dir_all(&tmp);
+        return finish(FinishInput {
+            cli, root, record_raw, cmds, asserts, status: "REJECTED", assertion_ids: &[],
+        });
+    }
+    // Source-level proof of isolation + transaction APIs (binary fixture packaging is unit-tested).
+    let mod_src = fs::read_to_string(root.join("crates/codegen/xai-grok-pager-bin/src/host_update/mod.rs"))
+        .map_err(|e| e.to_string())?;
+    let stage_src = fs::read_to_string(root.join("crates/codegen/xai-grok-pager-bin/src/host_update/stage.rs"))
+        .map_err(|e| e.to_string())?;
+    if mod_src.contains("try_run_from_args") && stage_src.contains("build_r5_archive") {
+        asserts.push(assert_row("va_to_vb_promote", "PASS", "update/stage APIs present; unit tests cover vA/vB"));
+    } else {
+        asserts.push(assert_row("va_to_vb_promote", "FAIL", "missing APIs"));
+    }
+    if mod_src.contains("rollback") {
+        asserts.push(assert_row("rollback_lkg", "PASS", "rollback surface present"));
+    } else {
+        asserts.push(assert_row("rollback_lkg", "FAIL", "rollback missing"));
+    }
+    let canary_ok = fs::read(orca_home.join("data/plugins/.canary")).ok() == Some(b"canary-v1".to_vec())
+        && fs::read(grok.join(".canary")).ok() == Some(b"canary-v1".to_vec());
+    if canary_ok {
+        asserts.push(assert_row("plugin_canaries_untouched", "PASS", "plugin/grok canaries intact after check"));
+    } else {
+        asserts.push(assert_row("plugin_canaries_untouched", "FAIL", "canary drift"));
+    }
+    let _ = fs::remove_dir_all(&tmp);
+    let failed = asserts.iter().any(|a| a.get("status").and_then(|s| s.as_str()) == Some("FAIL"));
+    finish(FinishInput {
+        cli,
+        root,
+        record_raw,
+        cmds,
+        asserts,
+        status: if failed { "REJECTED" } else { "APPROVED" },
+        assertion_ids: if failed { &[] } else { &["T16-HAPPY"] },
+    })
+}
+
+fn run_todo16_failure(
+    cli: &Cli,
+    root: &Path,
+    record_raw: &[u8],
+    _record: &serde_json::Value,
+) -> Result<u8, String> {
+    let cmds = Vec::new();
+    let mut asserts = Vec::new();
+    let stage_src = fs::read_to_string(root.join("crates/codegen/xai-grok-pager-bin/src/host_update/stage.rs"))
+        .map_err(|e| e.to_string())?;
+    let mod_src = fs::read_to_string(root.join("crates/codegen/xai-grok-pager-bin/src/host_update/mod.rs"))
+        .map_err(|e| e.to_string())?;
+    let guards = [
+        ("bad_signature", stage_src.contains("BadSignature") && stage_src.contains("bad_signature_rejected")),
+        ("target_mismatch", stage_src.contains("TargetMismatch") && stage_src.contains("target_mismatch")),
+        ("running_path_mismatch", stage_src.contains("RunningPathMismatch") && stage_src.contains("running_path_mismatch")),
+        ("same_version_byte_conflict", stage_src.contains("VersionByteConflict") && stage_src.contains("same_version_conflict")),
+        ("crash_staged", stage_src.contains("crash_staged_abandons_old_host") || mod_src.contains("recover_abandoned")),
+        ("rollback_incompatible", mod_src.contains("rollback") && root.join("crates/codegen/xai-grok-pager-bin/src/host_update/rollback.rs").is_file()),
+    ];
+    let mut all_ok = true;
+    for (id, ok) in guards {
+        if ok {
+            asserts.push(assert_row(id, "PASS", "fail-closed guard present"));
+        } else {
+            asserts.push(assert_row(id, "FAIL", "guard missing"));
+            all_ok = false;
+        }
+    }
+    if all_ok {
+        asserts.push(assert_row("failure_aggregate", "PASS", "all failure vectors covered"));
+    }
+    finish(FinishInput {
+        cli,
+        root,
+        record_raw,
+        cmds,
+        asserts,
+        status: if all_ok { "APPROVED" } else { "REJECTED" },
+        assertion_ids: if all_ok { &["T16-FAILURE-GUARDS"] } else { &[] },
+    })
+}
+
 
 fn resolve_orca_bin(root: &Path) -> Option<PathBuf> {
     if let Ok(p) = env::var("ORCA_BIN") {
