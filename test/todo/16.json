@@ -3,25 +3,22 @@
   "todo": 16,
   "role": "orca",
   "title": "Host self-update transaction",
-  "status": "frozen-record",
+  "status": "live",
   "happy": {
     "assertionId": "T16-HAPPY",
-    "action": {
-      "kind": "deferred",
-      "subject": "task-16"
-    },
-    "checks": [
-      "owned_by_later_task"
-    ]
+    "action": { "kind": "host-update", "subject": "task-16" },
+    "checks": ["owned_paths", "update_check_readonly", "va_to_vb_promote", "rollback_lkg", "plugin_canaries_untouched"]
   },
   "failure": {
     "assertionId": "T16-FAILURE-GUARDS",
     "fixtures": [
-      {
-        "id": "deferred",
-        "expect": "product_validation_deferred"
-      }
+      { "id": "bad_signature", "expect": "typed_refusal" },
+      { "id": "target_mismatch", "expect": "typed_refusal" },
+      { "id": "running_path_mismatch", "expect": "typed_refusal" },
+      { "id": "same_version_byte_conflict", "expect": "typed_refusal" },
+      { "id": "crash_staged", "expect": "converge_old" },
+      { "id": "rollback_incompatible", "expect": "typed_refusal" }
     ]
   },
-  "note": "Product implementation is Task 16. This record is frozen by Task 2."
+  "note": "Live Task 16 QA: transactional independent Orca host update and rollback."
 }

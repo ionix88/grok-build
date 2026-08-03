@@ -5,6 +5,7 @@
     unreachable_code,
     dead_code
 )]
+mod host_update;
 mod import_grok;
 #[cfg(all(feature = "jemalloc", unix))]
 #[global_allocator]
@@ -1661,6 +1662,9 @@ fn main() {
     }
     {
         let argv: Vec<String> = std::env::args().skip(1).collect();
+        if let Some(code) = host_update::try_run_from_args(&argv) {
+            std::process::exit(code);
+        }
         if let Some(code) = import_grok::try_run_from_args(argv) {
             std::process::exit(code);
         }
