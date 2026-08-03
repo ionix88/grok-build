@@ -39,6 +39,7 @@ use super::app_view::{ActiveView, AppView};
 
 mod background;
 mod follow_ups;
+pub(crate) mod go_orca;
 mod interactions;
 mod mcp;
 mod permissions;

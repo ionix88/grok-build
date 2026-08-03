@@ -1,0 +1,10 @@
+{
+  "backupDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "backupId": "bk-1",
+  "cohortKey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "expiresAt": "2026-08-03T00:10:00.000Z",
+  "kind": "BackupDeletePlan",
+  "planDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "pluginId": "go-orca",
+  "schemaVersion": 1
+}

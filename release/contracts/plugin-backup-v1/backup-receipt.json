@@ -1,0 +1,12 @@
+{
+  "backupDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "backupId": "bk-1",
+  "bytes": 1024,
+  "cohortKey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "createdAt": "2026-08-03T00:00:00.000Z",
+  "installReceiptDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "kind": "BackupReceipt",
+  "pluginId": "go-orca",
+  "revision": 1,
+  "schemaVersion": 1
+}

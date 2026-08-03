@@ -1,0 +1,23 @@
+{
+  "backendId": "go-orca",
+  "checks": [
+    {
+      "code": "SLOW",
+      "id": "daemon",
+      "message": "daemon latency elevated",
+      "severity": "warning"
+    },
+    {
+      "code": "OK",
+      "id": "store",
+      "message": "store open",
+      "severity": "info"
+    }
+  ],
+  "cohortKey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "installReceiptDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "pluginVersion": "1.2.0",
+  "schemaVersion": 1,
+  "sourceRevision": 1,
+  "status": "degraded"
+}

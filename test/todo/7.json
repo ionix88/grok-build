@@ -2,26 +2,32 @@
   "schemaVersion": 1,
   "todo": 7,
   "role": "orca",
-  "title": "Project host contracts and ACP fixtures for Go-Orca",
-  "status": "frozen-record",
+  "title": "Publish ACP, rich extension, diagnostics, lifecycle, and backup contracts",
+  "status": "live",
   "happy": {
     "assertionId": "T07-HAPPY",
     "action": {
-      "kind": "deferred",
+      "kind": "contract_publish",
       "subject": "task-7"
     },
     "checks": [
-      "owned_by_later_task"
+      "acp_pin_verified",
+      "release_contracts_present",
+      "shared_trees_byte_identical",
+      "agent_backend_v2_fixtures",
+      "go_orca_projection_fixtures",
+      "diagnostics_no_authority"
     ]
   },
   "failure": {
     "assertionId": "T07-FAILURE-GUARDS",
     "fixtures": [
-      {
-        "id": "deferred",
-        "expect": "product_validation_deferred"
-      }
+      { "id": "source_hash_drift", "expect": "ACP_SCHEMA_PIN_MISMATCH" },
+      { "id": "authority_diagnostics", "expect": "PLUGIN_DIAGNOSTICS_AUTHORITY" },
+      { "id": "divergent_copies", "expect": "PLUGIN_CONTRACT_DIVERGENT_COPIES" },
+      { "id": "executable_contract", "expect": "HOST_CONTRACT_EXECUTABLE_CONTENT" },
+      { "id": "unknown_rich_major", "expect": "STANDARD_FALLBACK" }
     ]
   },
-  "note": "Product implementation is Task 7. This record is frozen by Task 2."
+  "note": "Task 7 live ORCA_QA — released host contracts and ACP fixtures."
 }

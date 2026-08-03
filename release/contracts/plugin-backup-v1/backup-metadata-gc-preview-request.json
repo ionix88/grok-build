@@ -1,0 +1,7 @@
+{
+  "cohortKey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "kind": "BackupMetadataGcPreviewRequest",
+  "pluginId": "go-orca",
+  "revision": 1,
+  "schemaVersion": 1
+}

@@ -1,0 +1,14 @@
+{
+  "cohortKey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "kind": "HostReferenceSnapshot",
+  "pluginId": "go-orca",
+  "references": [
+    {
+      "backupId": "bk-1",
+      "holder": "session-pin"
+    }
+  ],
+  "revision": 1,
+  "schemaVersion": 1,
+  "writer": "Host"
+}

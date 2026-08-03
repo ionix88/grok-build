@@ -1,0 +1,168 @@
+{
+  "$id": "https://go-orca.dev/schema/plugin-lifecycle/v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "not": {
+        "required": [
+          "authority"
+        ]
+      }
+    },
+    {
+      "not": {
+        "required": [
+          "executable"
+        ]
+      }
+    },
+    {
+      "not": {
+        "required": [
+          "grant"
+        ]
+      }
+    }
+  ],
+  "properties": {
+    "barrierRevision": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "cohortKey": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "deadlineUnixMs": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "descriptor": {
+      "properties": {
+        "contentSha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        "deviceId": {
+          "type": "string"
+        },
+        "gid": {
+          "type": "integer"
+        },
+        "inode": {
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "file",
+            "directory"
+          ]
+        },
+        "mode": {
+          "type": "string"
+        },
+        "mtimeNs": {
+          "type": "integer"
+        },
+        "path": {
+          "type": "string"
+        },
+        "schemaVersion": {
+          "const": 1
+        },
+        "size": {
+          "type": "integer"
+        },
+        "uid": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "kind",
+        "path",
+        "contentSha256"
+      ],
+      "type": "object"
+    },
+    "epochCandidate": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "holdRevision": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "installReceiptDigest": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "kind": {
+      "enum": [
+        "ProvisionRequest",
+        "DaemonProvisioned",
+        "ProvisioningOpened",
+        "ProvisionRejected",
+        "PreparePurge",
+        "PreparedToClose",
+        "BarrierCommitted",
+        "WriterClosed",
+        "PreparePurgeRejected",
+        "AbortPrepare"
+      ]
+    },
+    "message": {
+      "maxLength": 512,
+      "type": "string"
+    },
+    "planDigest": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "pluginId": {
+      "type": "string"
+    },
+    "provisionEpoch": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "provisionNonce": {
+      "type": "string"
+    },
+    "reasonCode": {
+      "type": "string"
+    },
+    "requestDigest": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "rootGeneration": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "rootIdentity": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "storeIdentity": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "transactionId": {
+      "type": "string"
+    },
+    "writer": {
+      "const": "Host"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "kind"
+  ],
+  "title": "Plugin Lifecycle Boundary Contracts v1",
+  "type": "object"
+}

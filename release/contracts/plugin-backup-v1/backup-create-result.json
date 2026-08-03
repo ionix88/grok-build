@@ -1,0 +1,10 @@
+{
+  "backupDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "backupId": "bk-1",
+  "cohortKey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "kind": "BackupCreateResult",
+  "pluginId": "go-orca",
+  "revision": 1,
+  "schemaVersion": 1,
+  "status": "complete"
+}

@@ -1,0 +1,10 @@
+{
+  "cohortKey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "installReceiptDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "kind": "PreparePurgeRejected",
+  "message": "cohort hold blocks purge",
+  "pluginId": "go-orca",
+  "reasonCode": "HOLD_ACTIVE",
+  "schemaVersion": 1,
+  "transactionId": "tx-purge-1"
+}

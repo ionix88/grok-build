@@ -1,0 +1,23 @@
+{
+  "backendId": "go-orca",
+  "checks": [
+    {
+      "code": "OK",
+      "id": "daemon",
+      "message": "daemon ready",
+      "severity": "info"
+    },
+    {
+      "code": "OK",
+      "id": "store",
+      "message": "store open",
+      "severity": "info"
+    }
+  ],
+  "cohortKey": null,
+  "installReceiptDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "pluginVersion": "1.2.0",
+  "schemaVersion": 1,
+  "sourceRevision": 1,
+  "status": "healthy"
+}

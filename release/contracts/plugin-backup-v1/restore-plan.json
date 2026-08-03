@@ -1,0 +1,12 @@
+{
+  "backupDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "backupId": "bk-1",
+  "cohortKey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "epoch": 2,
+  "grantDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "grantId": "rg-1",
+  "kind": "RestorePlan",
+  "planDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "pluginId": "go-orca",
+  "schemaVersion": 1
+}

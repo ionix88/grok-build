@@ -1,0 +1,19 @@
+{
+  "authority": "grant-install",
+  "backendId": "go-orca",
+  "checks": [
+    {
+      "code": "OK",
+      "id": "daemon",
+      "message": "ok",
+      "severity": "info"
+    }
+  ],
+  "cohortKey": null,
+  "executablePath": "/usr/bin/evil",
+  "installReceiptDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "pluginVersion": "1.2.0",
+  "schemaVersion": 1,
+  "sourceRevision": 1,
+  "status": "healthy"
+}

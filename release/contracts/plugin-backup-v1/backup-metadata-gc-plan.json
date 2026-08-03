@@ -1,0 +1,14 @@
+{
+  "cohortKey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "entries": [
+    {
+      "backupDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "backupId": "bk-old"
+    }
+  ],
+  "expiresAt": "2026-08-03T00:10:00.000Z",
+  "kind": "BackupMetadataGcPlan",
+  "planDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "pluginId": "go-orca",
+  "schemaVersion": 1
+}

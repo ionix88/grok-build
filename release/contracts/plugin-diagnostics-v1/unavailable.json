@@ -1,0 +1,17 @@
+{
+  "backendId": "go-orca",
+  "checks": [
+    {
+      "code": "DOWN",
+      "id": "daemon",
+      "message": "daemon not reachable",
+      "severity": "error"
+    }
+  ],
+  "cohortKey": null,
+  "installReceiptDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "pluginVersion": "1.2.0",
+  "schemaVersion": 1,
+  "sourceRevision": 1,
+  "status": "unavailable"
+}

@@ -1,0 +1,33 @@
+{
+  "$id": "https://orca.dev/release/contracts/agent-backend-v2",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "agentBackends": {
+      "minItems": 1,
+      "type": "array"
+    },
+    "description": {
+      "type": "string"
+    },
+    "license": {
+      "type": "string"
+    },
+    "manifestVersion": {
+      "const": 2
+    },
+    "name": {
+      "type": "string"
+    },
+    "version": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "manifestVersion",
+    "name",
+    "version",
+    "agentBackends"
+  ],
+  "title": "Agent Backend Manifest v2",
+  "type": "object"
+}

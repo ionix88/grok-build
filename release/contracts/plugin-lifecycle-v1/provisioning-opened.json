@@ -1,0 +1,13 @@
+{
+  "barrierRevision": 1,
+  "cohortKey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "installReceiptDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "kind": "ProvisioningOpened",
+  "pluginId": "go-orca",
+  "provisionEpoch": 1,
+  "rootGeneration": 1,
+  "rootIdentity": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "schemaVersion": 1,
+  "storeIdentity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "writer": "Host"
+}

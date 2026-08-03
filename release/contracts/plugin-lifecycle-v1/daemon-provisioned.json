@@ -1,0 +1,12 @@
+{
+  "cohortKey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "installReceiptDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "kind": "DaemonProvisioned",
+  "pluginId": "go-orca",
+  "provisionEpoch": 1,
+  "provisionNonce": "00000000000000000000000000000000",
+  "rootGeneration": 1,
+  "rootIdentity": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "schemaVersion": 1,
+  "storeIdentity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+}

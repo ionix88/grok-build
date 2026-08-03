@@ -1,0 +1,14 @@
+{
+  "cohortKey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "entries": [
+    {
+      "backupId": "bk-old",
+      "status": "removed"
+    }
+  ],
+  "kind": "BackupMetadataGcResult",
+  "planDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "pluginId": "go-orca",
+  "schemaVersion": 1,
+  "status": "complete"
+}

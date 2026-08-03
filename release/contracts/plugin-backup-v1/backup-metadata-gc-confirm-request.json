@@ -1,0 +1,8 @@
+{
+  "cohortKey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "confirmDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "kind": "BackupMetadataGcConfirmRequest",
+  "planDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "pluginId": "go-orca",
+  "schemaVersion": 1
+}

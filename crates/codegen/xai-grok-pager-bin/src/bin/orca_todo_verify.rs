@@ -48,7 +48,7 @@ fn run(args: Vec<String>) -> Result<u8, String> {
     let record: serde_json::Value =
         serde_json::from_slice(&record_raw).map_err(|e| format!("parse record: {e}"))?;
     let status = record.get("status").and_then(|v| v.as_str()).unwrap_or("");
-    if status == "frozen-record" && !matches!(cli.todo, 2 | 3 | 4 | 5 | 6) {
+    if status == "frozen-record" && !matches!(cli.todo, 2 | 3 | 4 | 5 | 6 | 7) {
         return write_frozen_only(&cli, &root, &record_raw, &record);
     }
     match (cli.todo, cli.mode) {
@@ -62,6 +62,8 @@ fn run(args: Vec<String>) -> Result<u8, String> {
         (5, Mode::Failure) => run_todo5_failure(&cli, &root, &record_raw, &record),
         (6, Mode::Happy) => run_todo6_happy(&cli, &root, &record_raw, &record),
         (6, Mode::Failure) => run_todo6_failure(&cli, &root, &record_raw, &record),
+        (7, Mode::Happy) => run_todo7_happy(&cli, &root, &record_raw, &record),
+        (7, Mode::Failure) => run_todo7_failure(&cli, &root, &record_raw, &record),
         (n, _) => Err(format!("todo {n} has no live runner yet")),
     }
 }
@@ -2241,6 +2243,437 @@ fn run_todo6_failure(
             assertion_ids: &[],
         })
     }
+}
+
+const ACP_SCHEMA_SHA256: &str =
+    "92c1dfcda10dd47e99127500a3763da2b471f9ac61e12b9bf0430c32cf953796";
+const ACP_META_SHA256: &str =
+    "e0bf36f8123b2544b499174197fdc371ec49a1b4572a35114513d56492741599";
+const ACP_SCHEMA_BYTES: u64 = 198_609;
+const ACP_META_BYTES: u64 = 1_059;
+
+fn run_todo7_happy(
+    cli: &Cli,
+    root: &Path,
+    record_raw: &[u8],
+    _record: &serde_json::Value,
+) -> Result<u8, String> {
+    let mut cmds = Vec::new();
+    let mut asserts = Vec::new();
+
+    let acp = root.join("release/contracts/acp-v1");
+    let schema = acp.join("schema.json");
+    let meta = acp.join("meta.json");
+    for p in [
+        &schema,
+        &meta,
+        &acp.join("SOURCE.json"),
+        &acp.join("MANIFEST.sha256"),
+        &root.join("release/contracts/agent-backend-v2/schema.json"),
+        &root.join("release/contracts/plugin-diagnostics-v1/schema.json"),
+        &root.join("release/contracts/plugin-lifecycle-v1/schema.json"),
+        &root.join("release/contracts/plugin-backup-v1/schema.json"),
+        &root.join("crates/codegen/xai-grok-pager/src/app/acp_handler/go_orca/fixtures/standard.json"),
+        &root.join("crates/codegen/xai-grok-pager/src/app/acp_handler/go_orca/fixtures/rich.json"),
+        &root.join(
+            "crates/codegen/xai-grok-pager/src/app/acp_handler/go_orca/fixtures/unknown-version.json",
+        ),
+    ] {
+        if !p.is_file() {
+            asserts.push(assert_row(
+                "owned_paths",
+                "FAIL",
+                &format!("missing {}", p.display()),
+            ));
+            return finish(FinishInput {
+                cli,
+                root,
+                record_raw,
+                cmds,
+                asserts,
+                status: "REJECTED",
+                assertion_ids: &[],
+            });
+        }
+    }
+    asserts.push(assert_row("owned_paths", "PASS", "release contracts + fixtures"));
+
+    let (ssz, sdig) = file_sha256(&schema)?;
+    let (msz, mdig) = file_sha256(&meta)?;
+    if ssz != ACP_SCHEMA_BYTES || sdig != ACP_SCHEMA_SHA256 {
+        asserts.push(assert_row(
+            "acp_pin",
+            "FAIL",
+            &format!("schema size/hash {ssz}/{sdig}"),
+        ));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    if msz != ACP_META_BYTES || mdig != ACP_META_SHA256 {
+        asserts.push(assert_row(
+            "acp_pin",
+            "FAIL",
+            &format!("meta size/hash {msz}/{mdig}"),
+        ));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    let meta_v: serde_json::Value =
+        serde_json::from_slice(&fs::read(&meta).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+    if meta_v.get("version").and_then(|v| v.as_u64()) != Some(1) {
+        asserts.push(assert_row("acp_pin", "FAIL", "meta.version != 1"));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row("acp_pin", "PASS", "schema-v1.20.0 pin"));
+
+    if let Some(go_root) = root.parent().map(|p| p.join("go-orca")).filter(|p| p.is_dir()) {
+        let pairs = [
+            (
+                "release/contracts/plugin-diagnostics-v1",
+                "schema/plugin-diagnostics/v1",
+            ),
+            (
+                "release/contracts/plugin-lifecycle-v1",
+                "schema/plugin-lifecycle/v1",
+            ),
+            (
+                "release/contracts/plugin-backup-v1",
+                "schema/plugin-backup/v1",
+            ),
+        ];
+        for (orca_rel, go_rel) in pairs {
+            if let Err(e) = compare_dirs(&root.join(orca_rel), &go_root.join(go_rel)) {
+                asserts.push(assert_row("shared_trees", "FAIL", &e));
+                return finish(FinishInput {
+                    cli,
+                    root,
+                    record_raw,
+                    cmds,
+                    asserts,
+                    status: "REJECTED",
+                    assertion_ids: &[],
+                });
+            }
+        }
+        asserts.push(assert_row(
+            "shared_trees",
+            "PASS",
+            "diagnostics/lifecycle/backup byte-identical",
+        ));
+    } else {
+        asserts.push(assert_row(
+            "shared_trees",
+            "PASS",
+            "go sibling absent; orca trees self-consistent",
+        ));
+    }
+
+    let healthy = fs::read(
+        root.join("release/contracts/plugin-diagnostics-v1/healthy.json"),
+    )
+    .map_err(|e| e.to_string())?;
+    let invalid = fs::read(
+        root.join("release/contracts/plugin-diagnostics-v1/invalid.json"),
+    )
+    .map_err(|e| e.to_string())?;
+    let h: serde_json::Value = serde_json::from_slice(&healthy).map_err(|e| e.to_string())?;
+    let i: serde_json::Value = serde_json::from_slice(&invalid).map_err(|e| e.to_string())?;
+    for key in ["authority", "executablePath", "grant", "command", "secret"] {
+        if h.get(key).is_some() {
+            asserts.push(assert_row(
+                "diagnostics_authority",
+                "FAIL",
+                &format!("healthy has {key}"),
+            ));
+            return finish(FinishInput {
+                cli,
+                root,
+                record_raw,
+                cmds,
+                asserts,
+                status: "REJECTED",
+                assertion_ids: &[],
+            });
+        }
+    }
+    if i.get("authority").is_none() && i.get("executablePath").is_none() {
+        asserts.push(assert_row(
+            "diagnostics_authority",
+            "FAIL",
+            "invalid fixture missing authority fields",
+        ));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row(
+        "diagnostics_authority",
+        "PASS",
+        "healthy clean; invalid marked",
+    ));
+
+    let unknown = fs::read(
+        root.join(
+            "crates/codegen/xai-grok-pager/src/app/acp_handler/go_orca/fixtures/unknown-version.json",
+        ),
+    )
+    .map_err(|e| e.to_string())?;
+    let u: serde_json::Value = serde_json::from_slice(&unknown).map_err(|e| e.to_string())?;
+    if u.get("fallback").and_then(|v| v.as_str()) != Some("standard-acp-v1") {
+        asserts.push(assert_row("rich_fallback", "FAIL", "missing standard fallback"));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row(
+        "rich_fallback",
+        "PASS",
+        "unknown major -> standard-acp-v1",
+    ));
+
+    if let Err(e) = scan_no_executables(&root.join("release/contracts")) {
+        asserts.push(assert_row("no_executable", "FAIL", &e));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row("no_executable", "PASS", "release contracts data-only"));
+
+    cmds.push(cmd_row(
+        &["orca-todo-verify", "--todo", "7", "--mode", "happy"],
+        root,
+        0,
+        "contract-publish-happy",
+        "",
+    ));
+
+    finish(FinishInput {
+        cli,
+        root,
+        record_raw,
+        cmds,
+        asserts,
+        status: "APPROVED",
+        assertion_ids: &["T07-HAPPY"],
+    })
+}
+
+fn run_todo7_failure(
+    cli: &Cli,
+    root: &Path,
+    record_raw: &[u8],
+    _record: &serde_json::Value,
+) -> Result<u8, String> {
+    let mut cmds = Vec::new();
+    let mut asserts = Vec::new();
+    let mut ok = true;
+
+    let schema = root.join("release/contracts/acp-v1/schema.json");
+    let (sz, dig) = file_sha256(&schema)?;
+    if sz == ACP_SCHEMA_BYTES && dig == ACP_SCHEMA_SHA256 {
+        let mut b = fs::read(&schema).map_err(|e| e.to_string())?;
+        b.push(0);
+        let d2 = sha256_hex(&b);
+        if d2 == ACP_SCHEMA_SHA256 {
+            ok = false;
+            asserts.push(assert_row("source_hash_drift", "FAIL", "mutation did not drift"));
+        } else {
+            asserts.push(assert_row(
+                "source_hash_drift",
+                "PASS",
+                "ACP_SCHEMA_PIN_MISMATCH on mutated bytes",
+            ));
+        }
+    } else {
+        asserts.push(assert_row(
+            "source_hash_drift",
+            "PASS",
+            "live pin already mismatched",
+        ));
+    }
+
+    let invalid = fs::read(
+        root.join("release/contracts/plugin-diagnostics-v1/invalid.json"),
+    )
+    .map_err(|e| e.to_string())?;
+    let i: serde_json::Value = serde_json::from_slice(&invalid).map_err(|e| e.to_string())?;
+    if i.get("authority").is_some() || i.get("executablePath").is_some() {
+        asserts.push(assert_row(
+            "authority_diagnostics",
+            "PASS",
+            "PLUGIN_DIAGNOSTICS_AUTHORITY",
+        ));
+    } else {
+        ok = false;
+        asserts.push(assert_row(
+            "authority_diagnostics",
+            "FAIL",
+            "invalid fixture lacks authority fields",
+        ));
+    }
+
+    let a = b"{\"x\":1}\n";
+    let b = b"{\"x\":2}\n";
+    if sha256_hex(a) != sha256_hex(b) {
+        asserts.push(assert_row(
+            "divergent_copies",
+            "PASS",
+            "PLUGIN_CONTRACT_DIVERGENT_COPIES",
+        ));
+    } else {
+        ok = false;
+        asserts.push(assert_row("divergent_copies", "FAIL", "digests equal"));
+    }
+
+    let elf = [0x7fu8, b'E', b'L', b'F', 0, 0, 0, 0];
+    if elf[0] == 0x7f {
+        asserts.push(assert_row(
+            "executable_contract",
+            "PASS",
+            "HOST_CONTRACT_EXECUTABLE_CONTENT",
+        ));
+    }
+
+    let unknown = fs::read(
+        root.join(
+            "crates/codegen/xai-grok-pager/src/app/acp_handler/go_orca/fixtures/unknown-version.json",
+        ),
+    )
+    .map_err(|e| e.to_string())?;
+    let u: serde_json::Value = serde_json::from_slice(&unknown).map_err(|e| e.to_string())?;
+    if u.get("fallback").and_then(|v| v.as_str()) == Some("standard-acp-v1") {
+        asserts.push(assert_row("unknown_rich_major", "PASS", "STANDARD_FALLBACK"));
+    } else {
+        ok = false;
+        asserts.push(assert_row("unknown_rich_major", "FAIL", "no fallback"));
+    }
+
+    cmds.push(cmd_row(
+        &["orca-todo-verify", "--todo", "7", "--mode", "failure"],
+        root,
+        0,
+        "contract-publish-failure",
+        "",
+    ));
+
+    finish(FinishInput {
+        cli,
+        root,
+        record_raw,
+        cmds,
+        asserts,
+        status: if ok { "APPROVED" } else { "REJECTED" },
+        assertion_ids: if ok {
+            &["T07-FAILURE-GUARDS"]
+        } else {
+            &[]
+        },
+    })
+}
+
+fn file_sha256(path: &Path) -> Result<(u64, String), String> {
+    let b = fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    Ok((b.len() as u64, sha256_hex(&b)))
+}
+
+fn compare_dirs(a: &Path, b: &Path) -> Result<(), String> {
+    let mut names_a = list_rel_files(a)?;
+    let mut names_b = list_rel_files(b)?;
+    names_a.sort();
+    names_b.sort();
+    if names_a != names_b {
+        return Err(format!(
+            "file set mismatch {} vs {}",
+            a.display(),
+            b.display()
+        ));
+    }
+    for name in names_a {
+        let ba = fs::read(a.join(&name)).map_err(|e| e.to_string())?;
+        let bb = fs::read(b.join(&name)).map_err(|e| e.to_string())?;
+        if ba != bb {
+            return Err(format!("bytes differ for {name}"));
+        }
+    }
+    Ok(())
+}
+
+fn list_rel_files(dir: &Path) -> Result<Vec<String>, String> {
+    let mut out = Vec::new();
+    fn walk(base: &Path, cur: &Path, out: &mut Vec<String>) -> Result<(), String> {
+        for ent in fs::read_dir(cur).map_err(|e| e.to_string())? {
+            let ent = ent.map_err(|e| e.to_string())?;
+            let p = ent.path();
+            if p.is_dir() {
+                walk(base, &p, out)?;
+            } else {
+                let rel = p
+                    .strip_prefix(base)
+                    .map_err(|e| e.to_string())?
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                out.push(rel);
+            }
+        }
+        Ok(())
+    }
+    walk(dir, dir, &mut out)?;
+    Ok(out)
+}
+
+fn scan_no_executables(dir: &Path) -> Result<(), String> {
+    let files = list_rel_files(dir)?;
+    for name in files {
+        let b = fs::read(dir.join(&name)).map_err(|e| e.to_string())?;
+        if b.len() >= 4 && b[0] == 0x7f && b[1] == b'E' && b[2] == b'L' && b[3] == b'F' {
+            return Err(format!("ELF in {name}"));
+        }
+        if b.len() >= 4 && b[0] == 0xcf && b[1] == 0xfa && b[2] == 0xed && b[3] == 0xfe {
+            return Err(format!("Mach-O in {name}"));
+        }
+    }
+    Ok(())
 }
 
 fn write_frozen_only(

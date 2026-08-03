@@ -1,0 +1,133 @@
+{
+  "$id": "https://go-orca.dev/schema/plugin-diagnostics/v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "required": [
+          "grant"
+        ]
+      },
+      {
+        "required": [
+          "command"
+        ]
+      },
+      {
+        "required": [
+          "executable"
+        ]
+      },
+      {
+        "required": [
+          "executablePath"
+        ]
+      },
+      {
+        "required": [
+          "secret"
+        ]
+      },
+      {
+        "required": [
+          "authority"
+        ]
+      },
+      {
+        "required": [
+          "hostDecision"
+        ]
+      }
+    ]
+  },
+  "properties": {
+    "backendId": {
+      "maxLength": 64,
+      "minLength": 1,
+      "pattern": "^[a-z0-9][a-z0-9._-]*$",
+      "type": "string"
+    },
+    "checks": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z0-9][a-z0-9._-]*$",
+            "type": "string"
+          },
+          "message": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "severity": {
+            "enum": [
+              "info",
+              "warning",
+              "error"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "severity",
+          "code",
+          "message"
+        ],
+        "type": "object"
+      },
+      "maxItems": 64,
+      "type": "array"
+    },
+    "cohortKey": {
+      "pattern": "^([a-f0-9]{64})?$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "installReceiptDigest": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "pluginVersion": {
+      "maxLength": 64,
+      "minLength": 1,
+      "type": "string"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "sourceRevision": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "status": {
+      "enum": [
+        "healthy",
+        "degraded",
+        "unavailable",
+        "incompatible"
+      ]
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "backendId",
+    "pluginVersion",
+    "installReceiptDigest",
+    "status",
+    "sourceRevision",
+    "checks"
+  ],
+  "title": "Plugin Diagnostics v1",
+  "type": "object"
+}

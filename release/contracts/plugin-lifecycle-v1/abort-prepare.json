@@ -1,0 +1,10 @@
+{
+  "cohortKey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "installReceiptDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "kind": "AbortPrepare",
+  "message": "operator aborted prepare",
+  "pluginId": "go-orca",
+  "reasonCode": "OPERATOR_ABORT",
+  "schemaVersion": 1,
+  "transactionId": "tx-purge-1"
+}

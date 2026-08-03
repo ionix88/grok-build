@@ -1,0 +1,15 @@
+{
+  "cohortKey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "entries": [
+    {
+      "backupId": "bk-1",
+      "holder": "session-pin"
+    }
+  ],
+  "kind": "HostReferenceIndexPage",
+  "nextPageToken": null,
+  "pageSize": 18,
+  "pluginId": "go-orca",
+  "revision": 1,
+  "schemaVersion": 1
+}

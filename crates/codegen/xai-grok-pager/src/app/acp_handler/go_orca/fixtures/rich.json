@@ -1,0 +1,21 @@
+{
+  "acpSchemaDigest": "92c1dfcda10dd47e99127500a3763da2b471f9ac61e12b9bf0430c32cf953796",
+  "extension": {
+    "features": [
+      "events",
+      "snapshot",
+      "agent-graph",
+      "task-graph",
+      "completion-audit",
+      "team-mailbox",
+      "runtime-status"
+    ],
+    "namespace": "_go-orca.dev",
+    "schemaDigest": "b97899cebe4796ab6b9374ba33ac68a58cc4ca7f89f6d63fbf79b73e729146ba",
+    "version": "1"
+  },
+  "mode": "rich",
+  "ndjsonDigest": "5fff3ac9349b62300ce2cbd415aa47c514664ec528f23c7d954e1802eeabcc75",
+  "schemaVersion": 1,
+  "sessionId": "sess-rich-001"
+}

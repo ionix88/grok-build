@@ -1,0 +1,8 @@
+{
+  "backupDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "backupId": "bk-1",
+  "cohortKey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "kind": "BackupDescribeRequest",
+  "pluginId": "go-orca",
+  "schemaVersion": 1
+}

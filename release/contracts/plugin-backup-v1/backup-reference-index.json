@@ -1,0 +1,13 @@
+{
+  "cohortKey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "kind": "BackupReferenceIndex",
+  "pluginId": "go-orca",
+  "references": [
+    {
+      "backupId": "bk-1",
+      "refCount": 1
+    }
+  ],
+  "revision": 1,
+  "schemaVersion": 1
+}

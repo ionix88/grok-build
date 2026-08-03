@@ -1,0 +1,16 @@
+{
+  "acpSchemaDigest": "92c1dfcda10dd47e99127500a3763da2b471f9ac61e12b9bf0430c32cf953796",
+  "extension": {
+    "features": [
+      "events"
+    ],
+    "namespace": "_go-orca.dev",
+    "schemaDigest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "version": "99"
+  },
+  "fallback": "standard-acp-v1",
+  "mode": "unknown-rich-major",
+  "ndjsonDigest": "9b1ed66cd2855be0083911627fa67a78b33e2d661aa32633c5a1baeea91fd827",
+  "schemaVersion": 1,
+  "sessionId": "sess-fallback-001"
+}

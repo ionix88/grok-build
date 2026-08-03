@@ -1,0 +1,10 @@
+{
+  "barrierRevision": 5,
+  "cohortKey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "installReceiptDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "kind": "WriterClosed",
+  "pluginId": "go-orca",
+  "schemaVersion": 1,
+  "transactionId": "tx-purge-1",
+  "writer": "Host"
+}

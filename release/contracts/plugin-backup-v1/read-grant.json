@@ -1,0 +1,11 @@
+{
+  "backupDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "backupId": "bk-1",
+  "cohortKey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "expiresAt": "2026-08-03T01:00:00.000Z",
+  "grantDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "grantId": "rg-1",
+  "kind": "ReadGrant",
+  "pluginId": "go-orca",
+  "schemaVersion": 1
+}

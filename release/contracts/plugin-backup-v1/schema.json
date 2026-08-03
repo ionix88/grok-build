@@ -1,0 +1,134 @@
+{
+  "$id": "https://go-orca.dev/schema/plugin-backup/v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "not": {
+        "required": [
+          "authority"
+        ]
+      }
+    },
+    {
+      "not": {
+        "required": [
+          "executable"
+        ]
+      }
+    },
+    {
+      "not": {
+        "required": [
+          "hostDecision"
+        ]
+      }
+    }
+  ],
+  "properties": {
+    "backupDigest": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "backupId": {
+      "type": "string"
+    },
+    "bytes": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "cohortKey": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "confirmDigest": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "createdAt": {
+      "type": "string"
+    },
+    "entries": {
+      "maxItems": 64,
+      "type": "array"
+    },
+    "epoch": {
+      "minimum": 1,
+      "type": "integer"
+    },
+    "expiresAt": {
+      "type": "string"
+    },
+    "grantDigest": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "grantId": {
+      "type": "string"
+    },
+    "installReceiptDigest": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "kind": {
+      "type": "string"
+    },
+    "managedKey": {
+      "type": "string"
+    },
+    "message": {
+      "maxLength": 512,
+      "type": "string"
+    },
+    "nextPageToken": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "pageSize": {
+      "maximum": 64,
+      "minimum": 1,
+      "type": "integer"
+    },
+    "pageToken": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "planDigest": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+    },
+    "pluginId": {
+      "type": "string"
+    },
+    "reasonCode": {
+      "type": "string"
+    },
+    "references": {
+      "maxItems": 64,
+      "type": "array"
+    },
+    "revision": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "status": {
+      "type": "string"
+    },
+    "writer": {
+      "const": "Host"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "kind"
+  ],
+  "title": "Plugin Backup Contracts v1",
+  "type": "object"
+}

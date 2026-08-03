@@ -1,0 +1,10 @@
+{
+  "cohortKey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "installReceiptDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "kind": "ProvisionRejected",
+  "message": "root already present without open barrier",
+  "pluginId": "go-orca",
+  "provisionNonce": "00000000000000000000000000000000",
+  "reasonCode": "ROOT_EXISTS",
+  "schemaVersion": 1
+}
