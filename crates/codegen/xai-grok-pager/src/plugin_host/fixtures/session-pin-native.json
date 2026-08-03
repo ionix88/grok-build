@@ -1,0 +1,8 @@
+{
+  "kind": "native",
+  "schemaVersion": 1,
+  "backendId": "native",
+  "hostSessionId": "host-sess-1",
+  "nativeSessionIdentity": "native-sess-1",
+  "pinDigest": "63101bb0664f96dc660e71ac9c0dcd5ed9329030df832d0fb3f0aed213f889ca"
+}

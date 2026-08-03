@@ -1,0 +1,17 @@
+{
+  "kind": "external",
+  "schemaVersion": 1,
+  "state": "creating",
+  "hostSessionId": "host-sess-2",
+  "creationKey": "00000000000000000000000000000000",
+  "requestDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "backendId": "go-orca",
+  "installReceiptDigest": "fd289aa1458324082cfac42747b709a263a11e5a159db751df76eb3edfb62cb4",
+  "cohortKey": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "extensionSchemaDigest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "rendererContractVersion": "1.0.0",
+  "acpSessionId": null,
+  "committedRevision": 0,
+  "committedCursor": 0,
+  "pinDigest": "d5e98cbd257cda5f25462700eeed6fee4d0714e1b0c7c2af01d410619debfc13"
+}

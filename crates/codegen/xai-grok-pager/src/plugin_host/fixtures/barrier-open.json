@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "pluginId": "go-orca",
+  "installReceiptDigest": "fd289aa1458324082cfac42747b709a263a11e5a159db751df76eb3edfb62cb4",
+  "cohortKey": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "revision": 3,
+  "writer": "host",
+  "body": {
+    "state": "open",
+    "rootGeneration": 1,
+    "rootIdentity": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "storeIdentity": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "provisionEpoch": 1
+  },
+  "barrierDigest": "abae0c5479cc53657d08d22002d831d8ac770c342a86921adca0d1ff72cc3c84"
+}

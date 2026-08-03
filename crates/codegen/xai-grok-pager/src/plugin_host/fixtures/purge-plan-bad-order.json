@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "planId": "plan-1",
+  "transactionId": "tx-1",
+  "pluginId": "go-orca",
+  "installReceiptDigest": "fd289aa1458324082cfac42747b709a263a11e5a159db751df76eb3edfb62cb4",
+  "members": [
+    {
+      "cohortKey": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "leaseId": "lease-1",
+      "daemonEpoch": 1,
+      "rootIdentity": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "storeIdentity": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "holdRevision": 0,
+      "entries": [
+        {
+          "entryIndex": 0,
+          "relativeComponents": [],
+          "kind": "directory",
+          "expectedEntryIdentitySha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "expectedParentIdentitySha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        },
+        {
+          "entryIndex": 1,
+          "relativeComponents": [
+            "data"
+          ],
+          "kind": "directory",
+          "expectedEntryIdentitySha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "expectedParentIdentitySha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        {
+          "entryIndex": 2,
+          "relativeComponents": [
+            "data",
+            "state.sqlite"
+          ],
+          "kind": "regular",
+          "expectedEntryIdentitySha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "expectedParentIdentitySha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      ]
+    }
+  ],
+  "eligibleBytes": 1024,
+  "createdAt": "2026-08-03T00:00:00.000Z",
+  "expiresAt": "2026-08-03T00:10:00.000Z",
+  "planDigest": ""
+}

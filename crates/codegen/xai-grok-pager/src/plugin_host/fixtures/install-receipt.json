@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "pluginId": "go-orca",
+  "version": "1.0.0",
+  "archiveSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "installRoot": "plugins/go-orca/1.0.0",
+  "target": "darwin-aarch64",
+  "files": [
+    {
+      "relativePath": "bin/go-orca",
+      "role": "executable",
+      "modeOctal": "0755",
+      "length": 100,
+      "contentSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    {
+      "relativePath": "manifest.json",
+      "role": "manifest",
+      "modeOctal": "0644",
+      "length": 50,
+      "contentSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    }
+  ],
+  "trust": "untrusted",
+  "nativeCode": true,
+  "capabilities": [
+    "acp"
+  ],
+  "permissions": [
+    "network.loopback"
+  ],
+  "installedAt": "2026-08-03T00:00:00.000Z",
+  "receiptDigest": "fd289aa1458324082cfac42747b709a263a11e5a159db751df76eb3edfb62cb4"
+}

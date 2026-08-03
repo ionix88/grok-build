@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "repos": {
+    "demo-abcd1234": {
+      "kind": {
+        "type": "Local",
+        "source_path": "/tmp/demo"
+      },
+      "installed_at": "2026-01-01T00:00:00Z",
+      "updated_at": "2026-01-01T00:00:00Z",
+      "path": "/tmp/installed/demo",
+      "plugins": {
+        "demo-plugin": {
+          "version": "0.1.0"
+        }
+      }
+    }
+  }
+}

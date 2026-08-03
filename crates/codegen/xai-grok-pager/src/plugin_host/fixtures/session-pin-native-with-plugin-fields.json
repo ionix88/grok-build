@@ -1,0 +1,8 @@
+{
+  "kind": "native",
+  "schemaVersion": 1,
+  "backendId": "native",
+  "hostSessionId": "host-sess-1",
+  "nativeSessionIdentity": "native-sess-1",
+  "installReceiptDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+}

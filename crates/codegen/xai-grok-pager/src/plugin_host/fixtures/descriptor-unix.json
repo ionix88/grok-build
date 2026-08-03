@@ -1,0 +1,17 @@
+{
+  "schema": "descriptor-identity/v1",
+  "platform": "unix",
+  "kind": "directory",
+  "stableObject": {
+    "kind": "unix",
+    "deviceHex": "1a",
+    "inodeHex": "2b"
+  },
+  "security": {
+    "kind": "unix",
+    "uidDecimal": "501",
+    "gidDecimal": "20",
+    "modeOctal": "0755",
+    "fileType": "directory"
+  }
+}
