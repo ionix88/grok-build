@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "name": "fixture-source-b",
+  "plugins": {
+    "go-orca": {
+      "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "components": {},
+      "agentBackends": [
+        {
+          "id": "go-orca",
+          "displayName": "Go-Orca Mirror",
+          "version": "1.1.0",
+          "requires": {
+            "orca": ">=0.4.0 <0.5.0",
+            "acp": ">=1 <2"
+          },
+          "targets": [
+            {
+              "os": "darwin",
+              "arch": "aarch64",
+              "artifact": {
+                "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                "mediaType": "application/gzip",
+                "hasSignature": false,
+                "hasProvenance": false,
+                "hasSbom": false
+              }
+            }
+          ],
+          "permissions": ["native-code"],
+          "disclosesNativeCode": true
+        }
+      ]
+    },
+    "other-backend": {
+      "components": {},
+      "agentBackends": [
+        {
+          "id": "other-backend",
+          "displayName": "Other Backend",
+          "version": "0.9.0",
+          "requires": {
+            "orca": ">=0.4.0 <1.0.0",
+            "acp": ">=1 <2"
+          },
+          "targets": [
+            {
+              "os": "linux",
+              "arch": "aarch64",
+              "artifact": {
+                "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+                "mediaType": "application/gzip",
+                "hasSignature": true,
+                "hasProvenance": true,
+                "hasSbom": true
+              }
+            }
+          ],
+          "permissions": ["native-code", "network-egress"],
+          "disclosesNativeCode": true
+        }
+      ]
+    }
+  }
+}

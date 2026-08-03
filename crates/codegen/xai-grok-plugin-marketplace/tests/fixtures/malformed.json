@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "plugins": {
+    "bad": {
+      "components": {},
+      "agentBackends": [
+        {
+          "id": "../escape",
+          "displayName": "Forged",
+          "targets": [
+            {
+              "os": "darwin",
+              "arch": "aarch64",
+              "artifact": {
+                "sha256": "not-a-valid-sha256",
+                "mediaType": "application/x-msdownload",
+                "hasSignature": true,
+                "hasProvenance": true,
+                "hasSbom": true
+              }
+            }
+          ],
+          "permissions": ["native-code"],
+          "disclosesNativeCode": false
+        }
+      ]
+    }
+  }
+}

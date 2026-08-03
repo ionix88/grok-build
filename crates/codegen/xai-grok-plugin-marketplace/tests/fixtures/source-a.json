@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "name": "fixture-source-a",
+  "plugins": {
+    "go-orca": {
+      "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "components": {
+        "skills": [{ "name": "durable-orchestrate", "description": "Run durable work" }]
+      },
+      "agentBackends": [
+        {
+          "id": "go-orca",
+          "displayName": "Go-Orca",
+          "version": "1.2.0",
+          "requires": {
+            "orca": ">=0.4.0 <0.6.0",
+            "acp": ">=1 <2"
+          },
+          "targets": [
+            {
+              "os": "darwin",
+              "arch": "aarch64",
+              "artifact": {
+                "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "mediaType": "application/gzip",
+                "hasSignature": true,
+                "hasProvenance": true,
+                "hasSbom": true
+              }
+            },
+            {
+              "os": "linux",
+              "arch": "x86_64",
+              "libc": "gnu",
+              "artifact": {
+                "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "mediaType": "application/gzip",
+                "hasSignature": true,
+                "hasProvenance": true,
+                "hasSbom": true
+              }
+            }
+          ],
+          "permissions": ["native-code", "private-daemon", "workspace-access"],
+          "disclosesNativeCode": true
+        }
+      ]
+    },
+    "content-only": {
+      "components": {
+        "commands": [{ "name": "/hello" }]
+      }
+    }
+  }
+}
