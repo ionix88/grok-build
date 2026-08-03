@@ -1191,6 +1191,7 @@ mod tests {
                 remote_sha: None,
                 remote_subdir: None,
                 components: None,
+                agent_backends: Vec::new(),
             };
 
             let result = update_from_marketplace_entry_transactional(
@@ -1356,6 +1357,7 @@ mod tests {
                 remote_sha: None,
                 remote_subdir: Some("plugins/acme".into()),
                 components: None,
+                agent_backends: Vec::new(),
             };
 
             let result = update_from_marketplace_entry_transactional(
@@ -1421,6 +1423,7 @@ mod tests {
                     remote_sha: None,
                     remote_subdir: Some(bad.into()),
                     components: None,
+                    agent_backends: Vec::new(),
                 };
                 let result = update_from_marketplace_entry_transactional(
                     Path::new("/tmp"),

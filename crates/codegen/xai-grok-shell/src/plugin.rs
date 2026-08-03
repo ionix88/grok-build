@@ -1787,6 +1787,7 @@ mod tests {
             remote_sha: None,
             remote_subdir: None,
             components: None,
+            agent_backends: Vec::new(),
         }
     }
 

@@ -1,8 +1,11 @@
 //! Core types for marketplace browse and install.
+//!
+//! // allow: SIZE_OK — plan Task 5 owns types.rs for source identity + backend catalog DTOs
 
 use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use xai_hooks_plugins_types::AgentBackendCatalogItem;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MarketplacePathError {
@@ -141,6 +144,120 @@ pub enum SourceKind {
     Git { url: String, branch: Option<String> },
 }
 
+/// Canonical source identity — equality key for add/list/remove/dedup.
+///
+/// Git identities normalize case, trailing `.git`/`/`, and GitHub URL forms.
+/// Local identities use the expanded path string (callers canonicalize).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct SourceIdentity(String);
+
+impl SourceIdentity {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn from_raw(s: impl Into<String>) -> Self {
+        Self(s.into())
+    }
+
+    pub fn from_source(source: &MarketplaceSource) -> Self {
+        match &source.kind {
+            SourceKind::Git { url, .. } => Self::from_git_url(url),
+            SourceKind::Local { path } => Self(path.display().to_string()),
+        }
+    }
+
+    pub fn from_git_url(url: &str) -> Self {
+        let trimmed = url.trim();
+        if let Some(rest) = trimmed
+            .strip_prefix("github:")
+            .or_else(|| trimmed.strip_prefix("GITHUB:"))
+        {
+            return Self(format!("github:{}", rest.to_ascii_lowercase()));
+        }
+        if let Some(owner_repo) = crate::canonical_github_owner_repo(url) {
+            return Self(format!("github:{owner_repo}"));
+        }
+        let s = trimmed.strip_suffix('/').unwrap_or(trimmed);
+        let s = s.strip_suffix(".git").unwrap_or(s);
+        Self(s.to_ascii_lowercase())
+    }
+
+    pub fn from_local_path(path: &Path) -> Self {
+        Self(path.display().to_string())
+    }
+
+    /// Parse a user-supplied identity string (git URL, github:owner/repo, or path).
+    pub fn parse_user_input(input: &str) -> Self {
+        let input = input.trim();
+        if input.starts_with("github:")
+            || input.contains("://")
+            || input.starts_with("git@")
+        {
+            Self::from_git_url(input)
+        } else {
+            Self::from_local_path(Path::new(input))
+        }
+    }
+}
+
+impl std::fmt::Display for SourceIdentity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// Reachability / parse status for one source during list (no network).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceStatus {
+    Ok,
+    Offline,
+    Malformed,
+    Unreachable,
+}
+
+/// One installed plugin that depends on a marketplace source.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstalledDependent {
+    pub source_identity: String,
+    pub plugin_name: String,
+    pub version: Option<String>,
+}
+
+/// Bounded catalog listing entry (search/filter/details surface).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CatalogListingEntry {
+    pub name: String,
+    pub source_name: String,
+    pub source_identity: String,
+    pub qualified_name: String,
+    pub version: Option<String>,
+    pub description: Option<String>,
+    pub category: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub agent_backends: Vec<AgentBackendCatalogItem>,
+    pub source_status: SourceStatus,
+}
+
+/// Result of listing across sources — per-source errors are isolated.
+#[derive(Debug, Clone, Default)]
+pub struct CatalogListResult {
+    pub entries: Vec<CatalogListingEntry>,
+    pub source_errors: Vec<SourceListError>,
+}
+
+/// Isolated failure for one source during list/search (others continue).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceListError {
+    pub source_name: String,
+    pub source_identity: String,
+    pub status: SourceStatus,
+    pub message: String,
+}
+
 /// A plugin found by scanning a marketplace.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MarketplaceEntry {
@@ -189,6 +306,9 @@ pub struct MarketplaceEntry {
     /// `None` = no catalog data for this plugin.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub components: Option<xai_hooks_plugins_types::PluginComponents>,
+    /// Native backend catalog summaries (presentation only; never install authority).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agent_backends: Vec<AgentBackendCatalogItem>,
 }
 
 /// Result of a marketplace scan, with catalog telemetry.
@@ -200,7 +320,9 @@ pub struct MarketplaceScan {
 }
 #[cfg(test)]
 mod tests {
-    use super::{MarketplaceEntry, MarketplacePathError, MarketplaceRelativePath};
+    use super::{
+        MarketplaceEntry, MarketplacePathError, MarketplaceRelativePath, SourceIdentity,
+    };
 
     #[test]
     fn marketplace_relative_path_rejects_absolute_parent_and_prefix() {
@@ -283,10 +405,21 @@ mod tests {
             remote_sha: None,
             remote_subdir: None,
             components: None,
+            agent_backends: Vec::new(),
         };
         let json = serde_json::to_string(&plugin).unwrap();
         let parsed: MarketplaceEntry = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.name, "test-plugin");
         assert_eq!(parsed.keywords, vec!["notion.so"]);
+    }
+
+    #[test]
+    fn source_identity_normalizes_github_urls() {
+        let a = SourceIdentity::from_git_url(
+            "https://github.com/xai-org/plugin-marketplace.git",
+        );
+        let b = SourceIdentity::from_git_url("git@github.com:XAI-org/plugin-marketplace");
+        assert_eq!(a, b);
+        assert_eq!(a.as_str(), "github:xai-org/plugin-marketplace");
     }
 }

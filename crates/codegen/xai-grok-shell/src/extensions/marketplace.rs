@@ -1952,6 +1952,7 @@ mod conversion_tests {
                 )],
                 ..Default::default()
             }),
+            agent_backends: Vec::new(),
         };
 
         let dto = to_plugin_entry(entry, "not_installed".to_string(), None);
