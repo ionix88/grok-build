@@ -1,0 +1,11 @@
+{
+  "id": "native-startup",
+  "cols": 120,
+  "rows": 32,
+  "pty_bytes": "\u001b[0m\u001b[1mOrca\u001b[0m\r\nstatus: ready\r\nbackend: native\r\n",
+  "expected_regions": [
+    { "id": "title", "text": "Orca" },
+    { "id": "status", "text": "ready" },
+    { "id": "backend", "text": "native" }
+  ]
+}

@@ -1,0 +1,17 @@
+@import "@xterm/xterm/css/xterm.css";
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: #0b0e14;
+  color: #d7dae0;
+}
+
+#t {
+  padding: 8px;
+}
+
+.xterm {
+  font-feature-settings: "liga" 0;
+}

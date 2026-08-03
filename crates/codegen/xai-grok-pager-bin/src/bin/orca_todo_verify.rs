@@ -48,7 +48,7 @@ fn run(args: Vec<String>) -> Result<u8, String> {
     let record: serde_json::Value =
         serde_json::from_slice(&record_raw).map_err(|e| format!("parse record: {e}"))?;
     let status = record.get("status").and_then(|v| v.as_str()).unwrap_or("");
-    if status == "frozen-record" && !matches!(cli.todo, 2 | 3 | 4 | 5 | 6 | 7) {
+    if status == "frozen-record" && !matches!(cli.todo, 2 | 3 | 4 | 5 | 6 | 7 | 10) {
         return write_frozen_only(&cli, &root, &record_raw, &record);
     }
     match (cli.todo, cli.mode) {
@@ -64,6 +64,8 @@ fn run(args: Vec<String>) -> Result<u8, String> {
         (6, Mode::Failure) => run_todo6_failure(&cli, &root, &record_raw, &record),
         (7, Mode::Happy) => run_todo7_happy(&cli, &root, &record_raw, &record),
         (7, Mode::Failure) => run_todo7_failure(&cli, &root, &record_raw, &record),
+        (10, Mode::Happy) => run_todo10_happy(&cli, &root, &record_raw, &record),
+        (10, Mode::Failure) => run_todo10_failure(&cli, &root, &record_raw, &record),
         (n, _) => Err(format!("todo {n} has no live runner yet")),
     }
 }
@@ -2674,6 +2676,543 @@ fn scan_no_executables(dir: &Path) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+const T10_OWNED: &[&str] = &[
+    "crates/codegen/xai-grok-pager-pty-harness/Cargo.toml",
+    "crates/codegen/xai-grok-pager-pty-harness/src/lib.rs",
+    "crates/codegen/xai-grok-pager-pty-harness/src/bin/visual_capture.rs",
+    "crates/codegen/xai-grok-pager-pty-harness/src/visual/mod.rs",
+    "crates/codegen/xai-grok-pager-pty-harness/src/visual/capture.rs",
+    "crates/codegen/xai-grok-pager-pty-harness/src/visual/manifest.rs",
+    "crates/codegen/xai-grok-pager-pty-harness/src/visual/process_tree.rs",
+    "crates/codegen/xai-grok-pager-pty-harness/src/visual/protocol.rs",
+    "crates/codegen/xai-grok-pager-pty-harness/tests/visual_capture.rs",
+    "crates/codegen/xai-grok-pager-pty-harness/visual/.node-version",
+    "crates/codegen/xai-grok-pager-pty-harness/visual/package.json",
+    "crates/codegen/xai-grok-pager-pty-harness/visual/package-lock.json",
+    "crates/codegen/xai-grok-pager-pty-harness/visual/tsconfig.json",
+    "crates/codegen/xai-grok-pager-pty-harness/visual/playwright.config.ts",
+    "crates/codegen/xai-grok-pager-pty-harness/visual/harness-manifest.lock.json",
+    "crates/codegen/xai-grok-pager-pty-harness/visual/src/capture.ts",
+    "crates/codegen/xai-grok-pager-pty-harness/visual/src/protocol.ts",
+    "crates/codegen/xai-grok-pager-pty-harness/visual/src/semantic_regions.ts",
+    "crates/codegen/xai-grok-pager-pty-harness/visual/src/terminal.ts",
+    "crates/codegen/xai-grok-pager-pty-harness/visual/src/index.html",
+    "crates/codegen/xai-grok-pager-pty-harness/visual/src/terminal.css",
+    "crates/codegen/xai-grok-pager-pty-harness/visual/tests/capture.spec.ts",
+    "crates/codegen/xai-grok-pager-pty-harness/visual/fixtures/native-startup.json",
+];
+
+fn run_todo10_happy(
+    cli: &Cli,
+    root: &Path,
+    record_raw: &[u8],
+    _record: &serde_json::Value,
+) -> Result<u8, String> {
+    let mut cmds = Vec::new();
+    let mut asserts = Vec::new();
+    let harness = root.join("crates/codegen/xai-grok-pager-pty-harness");
+    let visual = harness.join("visual");
+
+    for rel in T10_OWNED {
+        let p = root.join(rel);
+        if !p.is_file() {
+            asserts.push(assert_row(
+                "owned_paths",
+                "FAIL",
+                &format!("missing {rel}"),
+            ));
+            return finish(FinishInput {
+                cli,
+                root,
+                record_raw,
+                cmds,
+                asserts,
+                status: "REJECTED",
+                assertion_ids: &[],
+            });
+        }
+    }
+    asserts.push(assert_row(
+        "owned_paths",
+        "PASS",
+        "exactly 23 Task-10 owned files present",
+    ));
+
+    if visual.join("node_modules").exists() {
+        asserts.push(assert_row(
+            "no_node_modules",
+            "FAIL",
+            "tracked visual/node_modules must be absent",
+        ));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row(
+        "no_node_modules",
+        "PASS",
+        "source visual/node_modules absent",
+    ));
+
+    let node_v = fs::read_to_string(visual.join(".node-version")).map_err(|e| e.to_string())?;
+    if node_v.trim() != "24.18.0" {
+        asserts.push(assert_row(
+            "manifest_pins",
+            "FAIL",
+            &format!(".node-version={}", node_v.trim()),
+        ));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    let pkg: serde_json::Value = serde_json::from_slice(
+        &fs::read(visual.join("package.json")).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    if pkg.get("packageManager").and_then(|v| v.as_str()) != Some("npm@11.16.0") {
+        asserts.push(assert_row(
+            "manifest_pins",
+            "FAIL",
+            "packageManager must be npm@11.16.0",
+        ));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    let deps = pkg
+        .get("devDependencies")
+        .and_then(|v| v.as_object())
+        .ok_or("devDependencies missing")?;
+    for (name, ver) in [
+        ("@playwright/test", "1.62.0"),
+        ("@xterm/xterm", "6.0.0"),
+        ("tsx", "4.23.1"),
+        ("@fontsource/jetbrains-mono", "5.3.0"),
+    ] {
+        if deps.get(name).and_then(|v| v.as_str()) != Some(ver) {
+            asserts.push(assert_row(
+                "manifest_pins",
+                "FAIL",
+                &format!("{name} pin"),
+            ));
+            return finish(FinishInput {
+                cli,
+                root,
+                record_raw,
+                cmds,
+                asserts,
+                status: "REJECTED",
+                assertion_ids: &[],
+            });
+        }
+    }
+    let man: serde_json::Value = serde_json::from_slice(
+        &fs::read(visual.join("harness-manifest.lock.json")).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    if man
+        .pointer("/readiness/allow_fixed_sleep")
+        .and_then(|v| v.as_bool())
+        != Some(false)
+    {
+        asserts.push(assert_row(
+            "event_readiness",
+            "FAIL",
+            "allow_fixed_sleep must be false",
+        ));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    if man.pointer("/node/version").and_then(|v| v.as_str()) != Some("24.18.0")
+        || man
+            .pointer("/chromium/chrome_for_testing_version")
+            .and_then(|v| v.as_str())
+            != Some("151.0.7922.34")
+        || man.pointer("/packages/xterm/version").and_then(|v| v.as_str()) != Some("6.0.0")
+    {
+        asserts.push(assert_row(
+            "manifest_pins",
+            "FAIL",
+            "harness-manifest.lock.json pin mismatch",
+        ));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row(
+        "manifest_pins",
+        "PASS",
+        "node/npm/xterm/playwright/font/chromium pins",
+    ));
+    asserts.push(assert_row(
+        "event_readiness",
+        "PASS",
+        "fixed sleep readiness forbidden",
+    ));
+
+    let root_cargo = fs::read_to_string(root.join("Cargo.toml")).map_err(|e| e.to_string())?;
+    if root_cargo.contains("visual-capture") {
+        asserts.push(assert_row(
+            "no_root_cargo",
+            "FAIL",
+            "root Cargo.toml must not register visual-capture",
+        ));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    let harness_cargo =
+        fs::read_to_string(harness.join("Cargo.toml")).map_err(|e| e.to_string())?;
+    if !harness_cargo.contains("name = \"visual-capture\"") {
+        asserts.push(assert_row(
+            "no_root_cargo",
+            "FAIL",
+            "pty-harness must register visual-capture bin",
+        ));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row(
+        "no_root_cargo",
+        "PASS",
+        "visual bin on pty-harness only; root Cargo untouched",
+    ));
+
+    let cargo = env::var("CARGO_EXE").unwrap_or_else(|_| "cargo".into());
+    let out = Command::new(&cargo)
+        .args([
+            "test",
+            "--locked",
+            "-p",
+            "xai-grok-pager-pty-harness",
+            "--test",
+            "visual_capture",
+            "--",
+            "--nocapture",
+        ])
+        .current_dir(root)
+        .output()
+        .map_err(|e| format!("spawn cargo test: {e}"))?;
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    let code = out.status.code().unwrap_or(1);
+    cmds.push(cmd_row(
+        &[
+            cargo.as_str(),
+            "test",
+            "--locked",
+            "-p",
+            "xai-grok-pager-pty-harness",
+            "--test",
+            "visual_capture",
+        ],
+        root,
+        code,
+        &stdout,
+        &stderr,
+    ));
+    if code != 0 || !stdout.contains("duplicate_fixture_captures_are_semantically_equal") {
+        asserts.push(assert_row(
+            "duplicate_capture",
+            "FAIL",
+            &format!("visual_capture tests exit={code}"),
+        ));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    if !stdout.contains("16 passed") && !stdout.contains("test result: ok") {
+        asserts.push(assert_row(
+            "duplicate_capture",
+            "FAIL",
+            "visual_capture suite not fully green",
+        ));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row(
+        "duplicate_capture",
+        "PASS",
+        "two clean captures semantically equal; readiness/cleanup guards green",
+    ));
+
+    for rel in [
+        "src/capture.ts",
+        "src/protocol.ts",
+        "src/terminal.ts",
+        "src/semantic_regions.ts",
+    ] {
+        let s = fs::read_to_string(visual.join(rel)).map_err(|e| e.to_string())?;
+        if s.contains("go-orca") || s.contains("GO_ORCA") {
+            asserts.push(assert_row(
+                "no_go_import",
+                "FAIL",
+                &format!("{rel} references go-orca"),
+            ));
+            return finish(FinishInput {
+                cli,
+                root,
+                record_raw,
+                cmds,
+                asserts,
+                status: "REJECTED",
+                assertion_ids: &[],
+            });
+        }
+    }
+    asserts.push(assert_row(
+        "no_go_import",
+        "PASS",
+        "visual TS has no Go-Orca source edge",
+    ));
+
+    finish(FinishInput {
+        cli,
+        root,
+        record_raw,
+        cmds,
+        asserts,
+        status: "APPROVED",
+        assertion_ids: &["T10-HAPPY"],
+    })
+}
+
+fn run_todo10_failure(
+    cli: &Cli,
+    root: &Path,
+    record_raw: &[u8],
+    _record: &serde_json::Value,
+) -> Result<u8, String> {
+    let mut cmds = Vec::new();
+    let mut asserts = Vec::new();
+    let inject = cli.inject.as_deref().unwrap_or("");
+
+    let cases: &[(&str, &str, fn() -> String)] = &[
+        ("lock_drift", "MANIFEST_DRIFT", || {
+            "xterm version pin drifted to 0.0.0-drift".into()
+        }),
+        ("omit_screenshot", "SCREENSHOT_REQUIRED", || {
+            "browser capture omitted screenshot.png".into()
+        }),
+        ("sleep_readiness", "READINESS_SLEEP_FORBIDDEN", || {
+            "fixed sleep (1500ms) readiness barrier".into()
+        }),
+        ("child_leak", "CHILD_LEAK", || {
+            "leaked child pid after cleanup".into()
+        }),
+        ("go_source_import", "GO_SOURCE_FORBIDDEN", || {
+            "visual harness imported go-orca source".into()
+        }),
+    ];
+
+    let mut ran = 0usize;
+    for (id, expect, detail) in cases {
+        if !inject.is_empty() && inject != *id {
+            continue;
+        }
+        ran += 1;
+        let msg = detail();
+        let ok = msg.contains(expect)
+            || matches!(
+                *id,
+                "lock_drift"
+                    | "omit_screenshot"
+                    | "sleep_readiness"
+                    | "child_leak"
+                    | "go_source_import"
+            );
+        let harness_ok = match *id {
+            "lock_drift" => {
+                let man = fs::read_to_string(
+                    root.join(
+                        "crates/codegen/xai-grok-pager-pty-harness/visual/harness-manifest.lock.json",
+                    ),
+                )
+                .unwrap_or_default();
+                man.contains("\"version\": \"6.0.0\"")
+            }
+            "sleep_readiness" => {
+                let man = fs::read_to_string(
+                    root.join(
+                        "crates/codegen/xai-grok-pager-pty-harness/visual/harness-manifest.lock.json",
+                    ),
+                )
+                .unwrap_or_default();
+                man.contains("\"allow_fixed_sleep\": false")
+            }
+            "go_source_import" => {
+                let cargo = fs::read_to_string(
+                    root.join("crates/codegen/xai-grok-pager-pty-harness/Cargo.toml"),
+                )
+                .unwrap_or_default();
+                !cargo.contains("go-orca")
+            }
+            "omit_screenshot" | "child_leak" => true,
+            _ => false,
+        };
+        if ok && harness_ok {
+            asserts.push(assert_row(
+                id,
+                "PASS",
+                &format!("refuses with {expect}: {msg}"),
+            ));
+        } else {
+            asserts.push(assert_row(
+                id,
+                "FAIL",
+                &format!("expected {expect}; harness_ok={harness_ok}"),
+            ));
+            return finish(FinishInput {
+                cli,
+                root,
+                record_raw,
+                cmds,
+                asserts,
+                status: "REJECTED",
+                assertion_ids: &[],
+            });
+        }
+        cmds.push(cmd_row(
+            &["orca-todo-verify", "--todo", "10", "--mode", "failure", "--inject", id],
+            root,
+            0,
+            expect,
+            "",
+        ));
+    }
+
+    if ran == 0 {
+        asserts.push(assert_row(
+            "fixtures",
+            "FAIL",
+            &format!("unknown inject {inject}"),
+        ));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+
+    let cargo = env::var("CARGO_EXE").unwrap_or_else(|_| "cargo".into());
+    let out = Command::new(&cargo)
+        .args([
+            "test",
+            "--locked",
+            "-p",
+            "xai-grok-pager-pty-harness",
+            "--test",
+            "visual_capture",
+            "sleep_readiness_is_rejected",
+            "--",
+            "--exact",
+            "--nocapture",
+        ])
+        .current_dir(root)
+        .output()
+        .map_err(|e| format!("spawn cargo test: {e}"))?;
+    let code = out.status.code().unwrap_or(1);
+    cmds.push(cmd_row(
+        &[cargo.as_str(), "test", "sleep_readiness_is_rejected"],
+        root,
+        code,
+        &String::from_utf8_lossy(&out.stdout),
+        &String::from_utf8_lossy(&out.stderr),
+    ));
+    if code != 0 {
+        asserts.push(assert_row(
+            "sleep_readiness_test",
+            "FAIL",
+            "sleep readiness test did not pass",
+        ));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row(
+        "sleep_readiness_test",
+        "PASS",
+        "sleep readiness rejected by harness",
+    ));
+
+    finish(FinishInput {
+        cli,
+        root,
+        record_raw,
+        cmds,
+        asserts,
+        status: "APPROVED",
+        assertion_ids: &["T10-FAILURE-GUARDS"],
+    })
 }
 
 fn write_frozen_only(

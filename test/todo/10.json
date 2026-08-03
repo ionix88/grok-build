@@ -2,26 +2,33 @@
   "schemaVersion": 1,
   "todo": 10,
   "role": "orca",
-  "title": "Add visual capture harness for CLI/TUI evidence",
-  "status": "frozen-record",
+  "title": "Pin deterministic PTY, xterm.js, and Chromium visual QA",
+  "status": "live",
   "happy": {
     "assertionId": "T10-HAPPY",
     "action": {
-      "kind": "deferred",
+      "kind": "visual_capture_pin",
       "subject": "task-10"
     },
     "checks": [
-      "owned_by_later_task"
+      "owned_paths",
+      "manifest_pins",
+      "duplicate_capture_semantic_eq",
+      "event_readiness_no_sleep",
+      "raw_pty_and_cleanup",
+      "no_root_cargo_change",
+      "no_tracked_node_modules"
     ]
   },
   "failure": {
     "assertionId": "T10-FAILURE-GUARDS",
     "fixtures": [
-      {
-        "id": "deferred",
-        "expect": "product_validation_deferred"
-      }
+      { "id": "lock_drift", "expect": "MANIFEST_DRIFT" },
+      { "id": "omit_screenshot", "expect": "SCREENSHOT_REQUIRED" },
+      { "id": "sleep_readiness", "expect": "READINESS_SLEEP_FORBIDDEN" },
+      { "id": "child_leak", "expect": "CHILD_LEAK" },
+      { "id": "go_source_import", "expect": "GO_SOURCE_FORBIDDEN" }
     ]
   },
-  "note": "Product implementation is Task 10. This record is frozen by Task 2."
+  "note": "Task 10 live ORCA_QA — deterministic visual capture pin."
 }

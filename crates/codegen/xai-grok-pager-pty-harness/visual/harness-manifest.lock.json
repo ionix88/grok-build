@@ -1,0 +1,202 @@
+{
+  "schema_version": 1,
+  "schema": "OrcaVisualHarnessManifestV1",
+  "node": {
+    "version": "24.18.0"
+  },
+  "npm": {
+    "version": "11.16.0"
+  },
+  "packages": {
+    "xterm": {
+      "name": "@xterm/xterm",
+      "version": "6.0.0",
+      "integrity": "sha512-TQwDdQGtwwDt+2cgKDLn0IRaSxYu1tSUjgKarSDkUM0ZNiSRXFpjxEsvc/Zgc5kq5omJ+V0a8/kIM2WD3sMOYg=="
+    },
+    "playwright_test": {
+      "name": "@playwright/test",
+      "version": "1.62.0",
+      "integrity": "sha512-9zOJ6ZQRAena31MpOH9VSzIz8Ou3YJ/wtY/eQm5T2uhfhG7/U3COrMS8xOtUrZrp9OgdmzEnIYODye3nY1VqzA=="
+    },
+    "tsx": {
+      "name": "tsx",
+      "version": "4.23.1",
+      "integrity": "sha512-GQHnkIfxyx1wYCOS/wonik5MVRZU9hi1TEZmzGZSCJB1y9YgoZ8H6itNE/u4suE+yLmOzuE4E5S4TZ/ZX2wcWQ=="
+    },
+    "fontsource_jetbrains_mono": {
+      "name": "@fontsource/jetbrains-mono",
+      "version": "5.3.0",
+      "integrity": "sha512-fqDfB5I9f1p1TV486aUgB9t8zP84P0O1FtQR5Ol9vjwPy+S+EIGlVYm1cvj2W5shcZMTg2nZFdVMoH5wFu8a1A=="
+    }
+  },
+  "chromium": {
+    "playwright_version": "1.62.0",
+    "chrome_for_testing_version": "151.0.7922.34",
+    "revision_label": "playwright-1.62.0-cft-151.0.7922.34",
+    "platforms": [
+      {
+        "target": "darwin-arm64",
+        "archive_url": "https://cdn.playwright.dev/builds/cft/151.0.7922.34/mac-arm64/chrome-mac-arm64.zip",
+        "archive_sha256": "01a23ef9501b2745e0c2944c2e583207e6f6132d8d91c3a87ff65b5079e438ef",
+        "archive_bytes": 187406357,
+        "executable_relpath": "chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+        "executable_sha256": "a596b1cfc6353e987fcec8d71a23a28cd6a9e7a6b4e20b908e4c4fcffe51158e",
+        "executable_bytes": 52112
+      },
+      {
+        "target": "linux-x64",
+        "archive_url": "https://cdn.playwright.dev/builds/cft/151.0.7922.34/linux64/chrome-linux64.zip",
+        "archive_sha256": "ae8736ac28bc69278551500f219fc749575648263c43ec5990749eff43b9fcf8",
+        "archive_bytes": 193282658,
+        "executable_relpath": "chrome-linux64/chrome",
+        "executable_sha256": "0b20b130e7edd9dd51873be867761295fe0cfad490c2b9a64f95bd3cfc08fa71",
+        "executable_bytes": 290614600
+      },
+      {
+        "target": "windows-x64",
+        "archive_url": "https://cdn.playwright.dev/builds/cft/151.0.7922.34/win64/chrome-win64.zip",
+        "archive_sha256": "045621e45a9dd27002c7fc1d8e10fe9f5f71f4cadbf44ec6f397f56f0179725c",
+        "archive_bytes": 201068834,
+        "executable_relpath": "chrome-win64/chrome.exe",
+        "executable_sha256": "409805a16d6416087e6b2f778df1cf8f7bbb267d6b99f6b5bb0a618eace234f2",
+        "executable_bytes": 4024832
+      }
+    ]
+  },
+  "font": {
+    "package": "@fontsource/jetbrains-mono",
+    "version": "5.3.0",
+    "file": "files/jetbrains-mono-latin-400-normal.woff2",
+    "bytes": 21168,
+    "sha256": "14425ba9c695763c1547f48a206b7aa60350a33ae23de09f0407877f3fcd89eb",
+    "license": "OFL-1.1"
+  },
+  "render": {
+    "locale": "C",
+    "timezone": "UTC",
+    "color_scheme": "dark",
+    "color_profile": "srgb",
+    "cols": 120,
+    "rows": 32,
+    "device_scale_factor": 2.0,
+    "viewport_width": 1240,
+    "viewport_height": 680,
+    "font_size": 15,
+    "term": "xterm-256color",
+    "colorterm": "truecolor"
+  },
+  "readiness": {
+    "allow_fixed_sleep": false,
+    "required_events": [
+      "xterm-write",
+      "webfont-ready",
+      "browser-lifecycle",
+      "stable-frame"
+    ]
+  },
+  "shell": {
+    "argv": [
+      "/bin/bash",
+      "--noprofile",
+      "--norc"
+    ],
+    "env_allowlist": [
+      "LANG",
+      "LC_ALL",
+      "TZ",
+      "TERM",
+      "COLORTERM",
+      "PATH"
+    ]
+  },
+  "source_digests": [
+    {
+      "path": "Cargo.toml",
+      "sha256": "166484ed838da2c11df87d9d35c0dd7ff2e66bbf094e03e1d7a01e7705ef9edb"
+    },
+    {
+      "path": "src/bin/visual_capture.rs",
+      "sha256": "43da40be40add20587526783cb11691f58a2ff47f8ae7004fb4df8d6e6df2397"
+    },
+    {
+      "path": "src/lib.rs",
+      "sha256": "d465362b4c423b9065f756e3b74858d27eabceecb43afc4dcaee1de99cf8589a"
+    },
+    {
+      "path": "src/visual/capture.rs",
+      "sha256": "361b8f227a4f8a6bc9ddbf5c0a0889e2bfa614a834ce032720d941b77d748c35"
+    },
+    {
+      "path": "src/visual/manifest.rs",
+      "sha256": "f5f4f2d40976947822f03014883511dbde201f9f4684e3b90900940c5dea06a4"
+    },
+    {
+      "path": "src/visual/mod.rs",
+      "sha256": "9590a08af33ef5199c516946f5372cec4baf5069d08e7c9518f75e824b30d905"
+    },
+    {
+      "path": "src/visual/process_tree.rs",
+      "sha256": "b2051a138b02dde7a78e8582d422b81372530e6007134c67cc2dc90cf7772e59"
+    },
+    {
+      "path": "src/visual/protocol.rs",
+      "sha256": "b7e62cf466b19b4a3d72e9bb54b02803cd7df24509314e2687a31a775ec4b792"
+    },
+    {
+      "path": "tests/visual_capture.rs",
+      "sha256": "1e16249d1498b98576c3d624db187af1d1e2be800fb8d48514e9bb74c7290862"
+    },
+    {
+      "path": "visual/.node-version",
+      "sha256": "55075b5ec4e8b31936cbbc282b8829116d1fd48f2f2f1856dee592a6650700ce"
+    },
+    {
+      "path": "visual/fixtures/native-startup.json",
+      "sha256": "14f95472d914051880ba3a7daa2eac1f84bb486aec6aea09f92cbaaa682b8dc7"
+    },
+    {
+      "path": "visual/package-lock.json",
+      "sha256": "da21c7d96d3df22cc2f426e8255b749c06f6d4d80d63bf895331d7e86372f5d4"
+    },
+    {
+      "path": "visual/package.json",
+      "sha256": "8e249c10cc9dc215e0483d0008249a35c01784c1e53e35eabf6056d6456dd73c"
+    },
+    {
+      "path": "visual/playwright.config.ts",
+      "sha256": "4246cc65956f73fd4a18e5699d5d1578cfa645776c5b60555e37ddd770ea6c59"
+    },
+    {
+      "path": "visual/src/capture.ts",
+      "sha256": "7b0dd97350b094253431b5454065ffb4599e07c83ae70597bbed695425922f77"
+    },
+    {
+      "path": "visual/src/index.html",
+      "sha256": "9ca53058040d19cea2cee21ea2041db7b2b3ea21f8b88424670c5843c81b3e23"
+    },
+    {
+      "path": "visual/src/protocol.ts",
+      "sha256": "7230d30e2dc5f7ba6b56e1f4d0eceab9791201698486612375d40e4df2076210"
+    },
+    {
+      "path": "visual/src/semantic_regions.ts",
+      "sha256": "9053121bbbf38cb46831803c0e196d503af91e5a14800e0f981af5dc7365b0d1"
+    },
+    {
+      "path": "visual/src/terminal.css",
+      "sha256": "552fd62c9b348d462bda2fb9a92916cc3189c3f35418f348985c617d99cd4ba1"
+    },
+    {
+      "path": "visual/src/terminal.ts",
+      "sha256": "a8e4f34b4be70826616e5144ab5ef9bd663336bb3467f2a977389457e3e608f1"
+    },
+    {
+      "path": "visual/tests/capture.spec.ts",
+      "sha256": "12ffeea6e7ad503ab4ca45412de213a60dfc1d86c0dc78a1722b77f6433c91e1"
+    },
+    {
+      "path": "visual/tsconfig.json",
+      "sha256": "40911fe687b26591f4fc7a36bb88745079fa69ff8aa7ee26f6d498c632de193d"
+    }
+  ]
+}

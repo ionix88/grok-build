@@ -34,6 +34,7 @@ pub mod screen;
 pub mod scripted;
 pub mod scroll_matrix;
 pub mod timing;
+pub mod visual;
 
 pub use content::{
     AgentTurnExpectation, ContentController, InferenceEndpoint, InferenceExpectation,
