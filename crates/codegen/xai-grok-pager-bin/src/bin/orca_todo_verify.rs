@@ -48,7 +48,7 @@ fn run(args: Vec<String>) -> Result<u8, String> {
     let record: serde_json::Value =
         serde_json::from_slice(&record_raw).map_err(|e| format!("parse record: {e}"))?;
     let status = record.get("status").and_then(|v| v.as_str()).unwrap_or("");
-    if status == "frozen-record" && !matches!(cli.todo, 2 | 3 | 4 | 5) {
+    if status == "frozen-record" && !matches!(cli.todo, 2 | 3 | 4 | 5 | 6) {
         return write_frozen_only(&cli, &root, &record_raw, &record);
     }
     match (cli.todo, cli.mode) {
@@ -60,6 +60,8 @@ fn run(args: Vec<String>) -> Result<u8, String> {
         (4, Mode::Failure) => run_todo4_failure(&cli, &root, &record_raw, &record),
         (5, Mode::Happy) => run_todo5_happy(&cli, &root, &record_raw, &record),
         (5, Mode::Failure) => run_todo5_failure(&cli, &root, &record_raw, &record),
+        (6, Mode::Happy) => run_todo6_happy(&cli, &root, &record_raw, &record),
+        (6, Mode::Failure) => run_todo6_failure(&cli, &root, &record_raw, &record),
         (n, _) => Err(format!("todo {n} has no live runner yet")),
     }
 }
@@ -1615,6 +1617,629 @@ fn fixture_write_failure_proxy(_bin: &Path, _tmp: &Path) -> FixtureOut {
             ok: false,
             detail: "write-failure seam missing".into(),
         }
+    }
+}
+
+fn run_todo6_happy(
+    cli: &Cli,
+    root: &Path,
+    record_raw: &[u8],
+    _record: &serde_json::Value,
+) -> Result<u8, String> {
+    use xai_grok_pager::plugin_host::{
+        preview_migrate_registry_v1, sort_purge_entries, validate_entry_order, BarrierStateV1,
+        BarrierWriter, EntryKind, EntryPhase, ExternalPinState, ExternalPinV1, HostBarrierV1,
+        InstallReceiptV1, LogicalDefaultV1, NativePinV1, PurgeEntryV1, PurgeJournalPhase,
+        PurgeJournalV1, PurgeMemberV1, PurgePlanV1, SessionPinV1, TrustState,
+    };
+    use xai_grok_pager::plugin_host::receipts::{FileRole, InventoryFile, RegistryDocumentV2};
+
+    let mut cmds = Vec::new();
+    let mut asserts = Vec::new();
+    let owned = [
+        root.join("crates/codegen/xai-grok-pager/src/plugin_host/receipts.rs"),
+        root.join("crates/codegen/xai-grok-pager/src/plugin_host/lifecycle.rs"),
+        root.join("crates/codegen/xai-grok-pager/src/plugin_host/canonical.rs"),
+        root.join("crates/codegen/xai-grok-pager/src/plugin_host/receipts_test.rs"),
+        root.join("crates/codegen/xai-grok-pager/src/plugin_host/lifecycle_test.rs"),
+        root.join("docs/PLUGIN_LIFECYCLE_SCHEMAS.md"),
+        root.join("crates/codegen/xai-grok-pager/src/plugin_host/fixtures/registry-v1.json"),
+    ];
+    if owned.iter().any(|p| !p.is_file()) {
+        asserts.push(assert_row("owned_paths", "FAIL", "Task 6 owned files missing"));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row("owned_paths", "PASS", "receipts/lifecycle/docs/fixtures"));
+
+    fn h(n: u8) -> String {
+        format!("{n:x}").repeat(64)
+    }
+
+    let receipt_a = InstallReceiptV1 {
+        schema_version: 1,
+        plugin_id: "go-orca".into(),
+        version: "1.0.0".into(),
+        archive_sha256: h(1),
+        install_root: "plugins/go-orca/1.0.0".into(),
+        target: "darwin-aarch64".into(),
+        files: vec![InventoryFile {
+            relative_path: "bin/go-orca".into(),
+            role: FileRole::Executable,
+            mode_octal: "0755".into(),
+            length: 1,
+            content_sha256: h(2),
+        }],
+        trust: TrustState::Untrusted,
+        native_code: true,
+        capabilities: vec!["acp".into()],
+        permissions: vec![],
+        installed_at: "2026-08-03T00:00:00.000Z".into(),
+        receipt_digest: String::new(),
+    }
+    .seal()
+    .map_err(|e| e.to_string())?;
+    let d1 = receipt_a.receipt_digest.clone();
+    let raw = serde_json::to_string(&receipt_a).map_err(|e| e.to_string())?;
+    let again = InstallReceiptV1::parse_json(&raw).map_err(|e| e.to_string())?;
+    if again.receipt_digest != d1 {
+        asserts.push(assert_row("canonical_digest", "FAIL", "digest drift"));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row(
+        "canonical_digest",
+        "PASS",
+        "install receipt digest stable",
+    ));
+
+    let native = NativePinV1 {
+        schema_version: 1,
+        backend_id: "native".into(),
+        host_session_id: "h1".into(),
+        native_session_identity: "n1".into(),
+        pin_digest: String::new(),
+    }
+    .seal()
+    .map_err(|e| e.to_string())?;
+    SessionPinV1::parse_json(&serde_json::to_string(&SessionPinV1::Native(native)).unwrap())
+        .map_err(|e| e.to_string())?;
+    let external = ExternalPinV1 {
+        schema_version: 1,
+        state: ExternalPinState::Creating,
+        host_session_id: "h2".into(),
+        creation_key: "0".repeat(32),
+        request_digest: h(3),
+        backend_id: "go-orca".into(),
+        install_receipt_digest: d1.clone(),
+        cohort_key: h(4),
+        extension_schema_digest: h(5),
+        renderer_contract_version: "1.0.0".into(),
+        acp_session_id: None,
+        committed_revision: 0,
+        committed_cursor: 0,
+        pin_digest: String::new(),
+    }
+    .seal()
+    .map_err(|e| e.to_string())?;
+    SessionPinV1::parse_json(&serde_json::to_string(&SessionPinV1::External(external)).unwrap())
+        .map_err(|e| e.to_string())?;
+    asserts.push(assert_row("session_pins", "PASS", "native+external sealed"));
+
+    let barrier = HostBarrierV1 {
+        schema_version: 1,
+        plugin_id: "go-orca".into(),
+        install_receipt_digest: d1.clone(),
+        cohort_key: h(4),
+        revision: 0,
+        writer: BarrierWriter::Host,
+        body: BarrierStateV1::Absent,
+        barrier_digest: String::new(),
+    }
+    .seal()
+    .map_err(|e| e.to_string())?
+    .transition(BarrierStateV1::Provisioning {
+        provision_nonce: "0".repeat(32),
+        epoch_candidate: 1,
+        root_identity: None,
+        store_identity: None,
+    })
+    .map_err(|e| e.to_string())?
+    .transition(BarrierStateV1::Open {
+        root_generation: 1,
+        root_identity: h(6),
+        store_identity: h(7),
+        provision_epoch: 1,
+    })
+    .map_err(|e| e.to_string())?;
+    if !matches!(barrier.body, BarrierStateV1::Open { .. }) {
+        asserts.push(assert_row("barrier", "FAIL", "not open"));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row(
+        "barrier",
+        "PASS",
+        "host-only Absent->Provisioning->Open",
+    ));
+
+    let entries = sort_purge_entries(vec![
+        PurgeEntryV1 {
+            entry_index: 0,
+            relative_components: vec!["f".into()],
+            kind: EntryKind::Regular,
+            expected_entry_identity_sha256: h(1),
+            expected_parent_identity_sha256: h(2),
+        },
+        PurgeEntryV1 {
+            entry_index: 0,
+            relative_components: vec![],
+            kind: EntryKind::Directory,
+            expected_entry_identity_sha256: h(2),
+            expected_parent_identity_sha256: h(3),
+        },
+    ]);
+    validate_entry_order(&entries).map_err(|e| e.to_string())?;
+    let plan = PurgePlanV1 {
+        schema_version: 1,
+        plan_id: "p1".into(),
+        transaction_id: "t1".into(),
+        plugin_id: "go-orca".into(),
+        install_receipt_digest: d1,
+        members: vec![PurgeMemberV1 {
+            cohort_key: h(4),
+            lease_id: "lease".into(),
+            daemon_epoch: 1,
+            root_identity: h(6),
+            store_identity: h(7),
+            hold_revision: 0,
+            entries,
+        }],
+        eligible_bytes: 1,
+        created_at: "2026-08-03T00:00:00.000Z".into(),
+        expires_at: "2026-08-03T00:10:00.000Z".into(),
+        plan_digest: String::new(),
+    }
+    .seal()
+    .map_err(|e| e.to_string())?;
+    PurgePlanV1::parse_json(&serde_json::to_string(&plan).unwrap()).map_err(|e| e.to_string())?;
+
+    let j = PurgeJournalV1 {
+        schema_version: 1,
+        plan_digest: plan.plan_digest.clone(),
+        phase: PurgeJournalPhase::Deleting,
+        arm_cursor: 1,
+        fence_cursor: 1,
+        member_cursor: 0,
+        entry_cursor: 0,
+        entry_phase: EntryPhase::Ready,
+        intent_present: false,
+        completion_present: false,
+        journal_digest: String::new(),
+    }
+    .seal()
+    .map_err(|e| e.to_string())?
+    .commit_intent_before_unlink()
+    .map_err(|e| e.to_string())?
+    .observe_deletion()
+    .map_err(|e| e.to_string())?
+    .commit_completion()
+    .map_err(|e| e.to_string())?
+    .advance_after_completion()
+    .map_err(|e| e.to_string())?;
+    if j.entry_cursor != 1 {
+        asserts.push(assert_row("purge_algebra", "FAIL", "cursor not advanced"));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row(
+        "purge_algebra",
+        "PASS",
+        "intent→completion→advance",
+    ));
+
+    let v1_path = root.join(
+        "crates/codegen/xai-grok-pager/src/plugin_host/fixtures/registry-v1.json",
+    );
+    let v1 = fs::read_to_string(&v1_path).map_err(|e| e.to_string())?;
+    let preview = preview_migrate_registry_v1(&v1).map_err(|e| e.to_string())?;
+    if !preview.preview_only || !preview.native_receipts.is_empty() {
+        asserts.push(assert_row("v1_preview", "FAIL", "not preview-only"));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row(
+        "v1_preview",
+        "PASS",
+        "registry-v1 migration preview-only",
+    ));
+
+    let def = LogicalDefaultV1 {
+        schema_version: 1,
+        backend_id: "go-orca".into(),
+        version_policy: "followActivation".into(),
+        default_digest: String::new(),
+    }
+    .seal()
+    .map_err(|e| e.to_string())?;
+    let dv = serde_json::to_value(&def).unwrap();
+    if dv.get("version").is_some() || dv.get("installReceiptDigest").is_some() {
+        asserts.push(assert_row("logical_default", "FAIL", "carries receipt/version"));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row(
+        "logical_default",
+        "PASS",
+        "followActivation only",
+    ));
+
+    let mut reg = RegistryDocumentV2::empty();
+    reg.insert_receipt(receipt_a).map_err(|e| e.to_string())?;
+    let _ = reg.seal().map_err(|e| e.to_string())?;
+
+    cmds.push(cmd_row(
+        &["orca-todo-verify", "t06-happy", "lifecycle-schemas"],
+        root,
+        0,
+        "ok",
+        "",
+    ));
+    asserts.push(assert_row(
+        "T06-HAPPY",
+        "PASS",
+        "canonical transitions + preview migration",
+    ));
+    finish(FinishInput {
+        cli,
+        root,
+        record_raw,
+        cmds,
+        asserts,
+        status: "APPROVED",
+        assertion_ids: &["T06-HAPPY"],
+    })
+}
+
+fn run_todo6_failure(
+    cli: &Cli,
+    root: &Path,
+    record_raw: &[u8],
+    _record: &serde_json::Value,
+) -> Result<u8, String> {
+    use xai_grok_pager::plugin_host::{
+        preview_migrate_registry_v1, sort_purge_entries, validate_entry_order, BarrierStateV1,
+        BarrierWriter, EntryKind, EntryPhase, HostBarrierV1, LifecycleError, NativePinV1,
+        PurgeEntryV1, PurgeJournalPhase, PurgeJournalV1, SessionPinV1,
+    };
+    use xai_grok_pager::plugin_host::receipts::{
+        conflict_same_version, FileRole, InstallReceiptV1, InventoryFile, ReceiptError,
+        RegistryDocumentV2, TrustState,
+    };
+
+    let fixtures = [
+        "native_plugin_fields",
+        "version_byte_conflict",
+        "bad_entry_order",
+        "advance_without_completion",
+        "intent_before_unlink",
+        "null_open_identity",
+        "illegal_barrier_transition",
+        "v1_native_fabricate",
+        "unknown_pin_kind",
+        "path_escape",
+    ];
+    if let Some(only) = &cli.inject
+        && !fixtures.contains(&only.as_str())
+    {
+        return Err(format!("unknown --inject {only}"));
+    }
+    let mut cmds = Vec::new();
+    let mut asserts = Vec::new();
+    let mut all_ok = true;
+
+    fn h(n: u8) -> String {
+        format!("{n:x}").repeat(64)
+    }
+
+    for id in fixtures {
+        if cli.inject.as_deref().is_some_and(|only| only != id) {
+            continue;
+        }
+        let rejected = match id {
+            "native_plugin_fields" => {
+                let pin = NativePinV1 {
+                    schema_version: 1,
+                    backend_id: "native".into(),
+                    host_session_id: "h".into(),
+                    native_session_identity: "n".into(),
+                    pin_digest: String::new(),
+                }
+                .seal()
+                .unwrap();
+                let mut v = serde_json::to_value(SessionPinV1::Native(pin)).unwrap();
+                v.as_object_mut().unwrap().insert(
+                    "installReceiptDigest".into(),
+                    serde_json::json!(h(1)),
+                );
+                matches!(
+                    SessionPinV1::parse_json(&serde_json::to_string(&v).unwrap()),
+                    Err(LifecycleError::NativeHasPluginFields)
+                )
+            }
+            "version_byte_conflict" => {
+                let mk = |arch: String| {
+                    InstallReceiptV1 {
+                        schema_version: 1,
+                        plugin_id: "go-orca".into(),
+                        version: "1.0.0".into(),
+                        archive_sha256: arch,
+                        install_root: "p".into(),
+                        target: "darwin-aarch64".into(),
+                        files: vec![InventoryFile {
+                            relative_path: "bin/x".into(),
+                            role: FileRole::Executable,
+                            mode_octal: "0755".into(),
+                            length: 1,
+                            content_sha256: h(2),
+                        }],
+                        trust: TrustState::Untrusted,
+                        native_code: true,
+                        capabilities: vec![],
+                        permissions: vec![],
+                        installed_at: "t".into(),
+                        receipt_digest: String::new(),
+                    }
+                    .seal()
+                    .unwrap()
+                };
+                let a = mk(h(1));
+                let b = mk(h(3));
+                matches!(
+                    conflict_same_version(&a, &b),
+                    Err(ReceiptError::VersionByteConflict(_))
+                ) && {
+                    let mut doc = RegistryDocumentV2::empty();
+                    doc.insert_receipt(a).unwrap();
+                    matches!(
+                        doc.insert_receipt(b),
+                        Err(ReceiptError::VersionByteConflict(_))
+                    )
+                }
+            }
+            "bad_entry_order" => {
+                let mut e = sort_purge_entries(vec![
+                    PurgeEntryV1 {
+                        entry_index: 0,
+                        relative_components: vec!["f".into()],
+                        kind: EntryKind::Regular,
+                        expected_entry_identity_sha256: h(1),
+                        expected_parent_identity_sha256: h(2),
+                    },
+                    PurgeEntryV1 {
+                        entry_index: 0,
+                        relative_components: vec![],
+                        kind: EntryKind::Directory,
+                        expected_entry_identity_sha256: h(2),
+                        expected_parent_identity_sha256: h(3),
+                    },
+                ]);
+                e.reverse();
+                for (i, x) in e.iter_mut().enumerate() {
+                    x.entry_index = i as u32;
+                }
+                validate_entry_order(&e).is_err()
+            }
+            "advance_without_completion" => {
+                let j = PurgeJournalV1 {
+                    schema_version: 1,
+                    plan_digest: h(1),
+                    phase: PurgeJournalPhase::Deleting,
+                    arm_cursor: 0,
+                    fence_cursor: 0,
+                    member_cursor: 0,
+                    entry_cursor: 0,
+                    entry_phase: EntryPhase::Ready,
+                    intent_present: false,
+                    completion_present: false,
+                    journal_digest: String::new(),
+                }
+                .seal()
+                .unwrap();
+                matches!(
+                    j.advance_after_completion(),
+                    Err(LifecycleError::CompletionBeforeAdvance)
+                )
+            }
+            "intent_before_unlink" => {
+                let j = PurgeJournalV1 {
+                    schema_version: 1,
+                    plan_digest: h(1),
+                    phase: PurgeJournalPhase::Deleting,
+                    arm_cursor: 0,
+                    fence_cursor: 0,
+                    member_cursor: 0,
+                    entry_cursor: 0,
+                    entry_phase: EntryPhase::Ready,
+                    intent_present: false,
+                    completion_present: false,
+                    journal_digest: String::new(),
+                }
+                .seal()
+                .unwrap();
+                matches!(j.observe_deletion(), Err(LifecycleError::IntentBeforeUnlink))
+            }
+            "null_open_identity" => {
+                let b = HostBarrierV1 {
+                    schema_version: 1,
+                    plugin_id: "go-orca".into(),
+                    install_receipt_digest: h(1),
+                    cohort_key: h(2),
+                    revision: 0,
+                    writer: BarrierWriter::Host,
+                    body: BarrierStateV1::Provisioning {
+                        provision_nonce: "0".repeat(32),
+                        epoch_candidate: 1,
+                        root_identity: None,
+                        store_identity: None,
+                    },
+                    barrier_digest: String::new(),
+                }
+                .seal()
+                .unwrap();
+                matches!(
+                    b.transition(BarrierStateV1::Open {
+                        root_generation: 1,
+                        root_identity: String::new(),
+                        store_identity: h(4),
+                        provision_epoch: 1,
+                    }),
+                    Err(LifecycleError::NullOpenIdentity)
+                )
+            }
+            "illegal_barrier_transition" => {
+                let b = HostBarrierV1 {
+                    schema_version: 1,
+                    plugin_id: "go-orca".into(),
+                    install_receipt_digest: h(1),
+                    cohort_key: h(2),
+                    revision: 0,
+                    writer: BarrierWriter::Host,
+                    body: BarrierStateV1::Absent,
+                    barrier_digest: String::new(),
+                }
+                .seal()
+                .unwrap();
+                matches!(
+                    b.transition(BarrierStateV1::Open {
+                        root_generation: 1,
+                        root_identity: h(3),
+                        store_identity: h(4),
+                        provision_epoch: 1,
+                    }),
+                    Err(LifecycleError::IllegalBarrierTransition { .. })
+                )
+            }
+            "v1_native_fabricate" => {
+                let raw = r#"{"version":1,"repos":{"x":{"kind":{"type":"Local","source_path":"/t"},"installed_at":"t","updated_at":"t","path":"/t","plugins":{"p":{"nativeCode":true}}}}}"#;
+                matches!(
+                    preview_migrate_registry_v1(raw),
+                    Err(ReceiptError::V1CannotFabricateNative)
+                )
+            }
+            "unknown_pin_kind" => matches!(
+                SessionPinV1::parse_json(r#"{"kind":"hybrid","schemaVersion":1}"#),
+                Err(LifecycleError::UnknownDiscriminator(_))
+            ),
+            "path_escape" => {
+                let err = InstallReceiptV1 {
+                    schema_version: 1,
+                    plugin_id: "go-orca".into(),
+                    version: "1.0.0".into(),
+                    archive_sha256: h(1),
+                    install_root: "p".into(),
+                    target: "darwin-aarch64".into(),
+                    files: vec![InventoryFile {
+                        relative_path: "../etc/passwd".into(),
+                        role: FileRole::Other,
+                        mode_octal: "0644".into(),
+                        length: 1,
+                        content_sha256: h(2),
+                    }],
+                    trust: TrustState::Untrusted,
+                    native_code: false,
+                    capabilities: vec![],
+                    permissions: vec![],
+                    installed_at: "t".into(),
+                    receipt_digest: String::new(),
+                }
+                .seal();
+                matches!(err, Err(ReceiptError::PathEscape(_)))
+            }
+            _ => false,
+        };
+        cmds.push(cmd_row(
+            &["orca-todo-verify", "t06-fixture", id],
+            root,
+            if rejected { 0 } else { 1 },
+            if rejected { "rejected" } else { "accepted" },
+            "",
+        ));
+        if rejected {
+            asserts.push(assert_row(id, "PASS", "typed refusal"));
+        } else {
+            all_ok = false;
+            asserts.push(assert_row(id, "FAIL", "accepted malformed vector"));
+        }
+    }
+
+    if all_ok {
+        asserts.push(assert_row(
+            "T06-FAILURE-GUARDS",
+            "PASS",
+            "all malformed vectors refused",
+        ));
+        finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "APPROVED",
+            assertion_ids: &["T06-FAILURE-GUARDS"],
+        })
+    } else {
+        finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        })
     }
 }
 

@@ -3,25 +3,36 @@
   "todo": 6,
   "role": "orca",
   "title": "Freeze host compatibility, receipt, pin, cohort, and lifecycle schemas",
-  "status": "frozen-record",
+  "status": "live",
   "happy": {
     "assertionId": "T06-HAPPY",
     "action": {
-      "kind": "deferred",
+      "kind": "lifecycle_schema_freeze",
       "subject": "task-6"
     },
     "checks": [
-      "owned_by_later_task"
+      "canonical_digests_stable",
+      "native_external_pins",
+      "host_barrier_writer",
+      "purge_intent_completion_order",
+      "registry_v1_preview_only",
+      "logical_default_no_receipt"
     ]
   },
   "failure": {
     "assertionId": "T06-FAILURE-GUARDS",
     "fixtures": [
-      {
-        "id": "deferred",
-        "expect": "product_validation_deferred"
-      }
+      { "id": "native_plugin_fields", "expect": "NativeHasPluginFields" },
+      { "id": "version_byte_conflict", "expect": "VersionByteConflict" },
+      { "id": "bad_entry_order", "expect": "PurgeOrder" },
+      { "id": "advance_without_completion", "expect": "CompletionBeforeAdvance" },
+      { "id": "intent_before_unlink", "expect": "IntentBeforeUnlink" },
+      { "id": "null_open_identity", "expect": "NullOpenIdentity" },
+      { "id": "illegal_barrier_transition", "expect": "IllegalBarrierTransition" },
+      { "id": "v1_native_fabricate", "expect": "V1CannotFabricateNative" },
+      { "id": "unknown_pin_kind", "expect": "UnknownDiscriminator" },
+      { "id": "path_escape", "expect": "PathEscape" }
     ]
   },
-  "note": "Product implementation is Task 6. This record is frozen by Task 2."
+  "note": "Task 6 live ORCA_QA — closed lifecycle/receipt schemas."
 }
