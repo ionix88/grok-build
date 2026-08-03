@@ -6552,6 +6552,7 @@ mod tests {
             mcp_servers: vec![component("m", None)],
             hooks: vec![component("h", None)],
             lsp_servers: vec![component("l", None)],
+            agent_backends: vec![],
         };
         let fields = render_components_fields(&components);
         let labels: Vec<&str> = fields.iter().map(|(label, _)| label.as_str()).collect();
