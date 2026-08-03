@@ -403,6 +403,152 @@ fn truncate_chars(s: &str, max_chars: usize) -> String {
     }
 }
 
+/// Presentation-only native backend summary from a marketplace catalog.
+///
+/// **Never install authority.** Catalog summaries expose target availability,
+/// archive identity digests, and trust-metadata presence flags only. They must
+/// not be used to launch, download, or register native code.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentBackendCatalogItem {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requires_orca: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requires_acp: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub targets: Vec<AgentBackendTargetSummary>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub permissions: Vec<String>,
+    /// Explicit native-code disclosure flag from the catalog.
+    #[serde(default)]
+    pub discloses_native_code: bool,
+    /// Always `false` after sanitize — catalog is never install authority.
+    #[serde(default)]
+    pub install_authority: bool,
+}
+
+/// Per-target availability + archive identity (digest only).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentBackendTargetSummary {
+    pub os: String,
+    pub arch: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub libc: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_type: Option<String>,
+    #[serde(default)]
+    pub has_signature: bool,
+    #[serde(default)]
+    pub has_provenance: bool,
+    #[serde(default)]
+    pub has_sbom: bool,
+}
+
+impl AgentBackendCatalogItem {
+    /// Bound strings, force `install_authority = false`, drop illegal digests.
+    pub fn sanitize(&mut self) {
+        self.id = truncate_chars(&strip_control_chars(&self.id), MAX_COMPONENT_NAME_CHARS);
+        if let Some(n) = self.display_name.take() {
+            let cleaned = truncate_chars(&strip_control_chars(&n), MAX_COMPONENT_NAME_CHARS);
+            self.display_name = if cleaned.is_empty() {
+                None
+            } else {
+                Some(cleaned)
+            };
+        }
+        if let Some(v) = self.version.take() {
+            let cleaned = truncate_chars(&strip_control_chars(&v), MAX_COMPONENT_NAME_CHARS);
+            self.version = if cleaned.is_empty() {
+                None
+            } else {
+                Some(cleaned)
+            };
+        }
+        if let Some(r) = self.requires_orca.take() {
+            let cleaned = truncate_chars(&strip_control_chars(&r), MAX_COMPONENT_DESC_CHARS);
+            self.requires_orca = if cleaned.is_empty() {
+                None
+            } else {
+                Some(cleaned)
+            };
+        }
+        if let Some(r) = self.requires_acp.take() {
+            let cleaned = truncate_chars(&strip_control_chars(&r), MAX_COMPONENT_DESC_CHARS);
+            self.requires_acp = if cleaned.is_empty() {
+                None
+            } else {
+                Some(cleaned)
+            };
+        }
+        self.permissions.truncate(MAX_COMPONENTS_PER_CATEGORY);
+        for p in &mut self.permissions {
+            *p = truncate_chars(&strip_control_chars(p), MAX_COMPONENT_NAME_CHARS);
+        }
+        self.permissions.retain(|p| !p.is_empty());
+        self.targets.truncate(MAX_COMPONENTS_PER_CATEGORY);
+        for t in &mut self.targets {
+            t.sanitize();
+        }
+        // Catalog summaries are never install authority.
+        self.install_authority = false;
+    }
+
+    pub fn is_valid_id(id: &str) -> bool {
+        !id.is_empty()
+            && id.len() <= MAX_COMPONENT_NAME_CHARS
+            && !id.contains('/')
+            && !id.contains('\\')
+            && !id.contains("..")
+            && id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+    }
+}
+
+impl AgentBackendTargetSummary {
+    pub fn sanitize(&mut self) {
+        self.os = truncate_chars(&strip_control_chars(&self.os), 32);
+        self.arch = truncate_chars(&strip_control_chars(&self.arch), 32);
+        if let Some(l) = self.libc.take() {
+            let cleaned = truncate_chars(&strip_control_chars(&l), 32);
+            self.libc = if cleaned.is_empty() {
+                None
+            } else {
+                Some(cleaned)
+            };
+        }
+        if let Some(sha) = self.artifact_sha256.take() {
+            let cleaned = sha.trim().to_ascii_lowercase();
+            self.artifact_sha256 = if is_sha256_hex(&cleaned) {
+                Some(cleaned)
+            } else {
+                None
+            };
+        }
+        if let Some(mt) = self.media_type.take() {
+            let cleaned = truncate_chars(&strip_control_chars(&mt), 64);
+            // Only advertise the sole native archive media type.
+            self.media_type = if cleaned == "application/gzip" {
+                Some(cleaned)
+            } else {
+                None
+            };
+        }
+    }
+}
+
+fn is_sha256_hex(s: &str) -> bool {
+    s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit())
+}
+
 /// Full inventory of a plugin's components, sourced from a marketplace
 /// catalog (`plugin-index.json`).
 ///
@@ -425,6 +571,9 @@ pub struct PluginComponents {
     pub hooks: Vec<ComponentItem>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub lsp_servers: Vec<ComponentItem>,
+    /// Native backend catalog summaries (presentation only; never install authority).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agent_backends: Vec<AgentBackendCatalogItem>,
 }
 
 /// Stable identifier for one of the six component categories. Consumers
@@ -506,6 +655,12 @@ impl PluginComponents {
                 item.sanitize();
             }
         }
+        self.agent_backends
+            .truncate(MAX_COMPONENTS_PER_CATEGORY);
+        self.agent_backends.retain_mut(|b| {
+            b.sanitize();
+            AgentBackendCatalogItem::is_valid_id(&b.id)
+        });
     }
 }
 
