@@ -31,6 +31,7 @@ pub fn scan_marketplace(root: &Path) -> MarketplaceScan {
                 // URL-sourced entries: build entry from index metadata only
                 // (the actual repo is cloned at install time, not scan time).
                 if let Some((url, git_ref)) = entry.remote_url() {
+                    let sha = entry.remote_sha();
                     let discovered = MarketplaceEntry {
                         name: entry.name.clone(),
                         version: entry.version.clone(),
@@ -48,13 +49,21 @@ pub fn scan_marketplace(root: &Path) -> MarketplaceScan {
                         has_mcp: false,
                         remote_url: Some(url.to_string()),
                         remote_ref: git_ref.map(|s| s.to_string()),
-                        remote_sha: entry.remote_sha().map(|s| s.to_string()),
+                        remote_sha: sha.map(|s| s.to_string()),
                         remote_subdir: entry.remote_subdir().map(|s| s.to_string()),
-                        components: entry.remote_sha().and_then(|sha| {
+                        components: sha.and_then(|s| {
                             plugin_catalog
                                 .as_ref()
-                                .and_then(|c| c.components_for(&entry.name, Some(sha)).cloned())
+                                .and_then(|c| c.components_for(&entry.name, Some(s)).cloned())
                         }),
+                        agent_backends: sha
+                            .and_then(|s| {
+                                plugin_catalog.as_ref().and_then(|c| {
+                                    c.agent_backends_for(&entry.name, Some(s))
+                                        .map(|b| b.to_vec())
+                                })
+                            })
+                            .unwrap_or_default(),
                     };
                     plugins.push(discovered);
                     continue;
@@ -106,6 +115,10 @@ pub fn scan_marketplace(root: &Path) -> MarketplaceScan {
                 discovered.components = plugin_catalog
                     .as_ref()
                     .and_then(|c| c.components_for(&entry.name, None).cloned());
+                discovered.agent_backends = plugin_catalog
+                    .as_ref()
+                    .and_then(|c| c.agent_backends_for(&entry.name, None).map(|b| b.to_vec()))
+                    .unwrap_or_default();
                 plugins.push(discovered);
             }
             MarketplaceScan {
@@ -244,6 +257,7 @@ fn scan_single_plugin(plugin_dir: &Path, relative_path: &str) -> MarketplaceEntr
         remote_sha: None,
         remote_subdir: None,
         components: None,
+        agent_backends: Vec::new(),
     }
 }
 
