@@ -11,14 +11,16 @@ mod stage;
 pub use apply::{promote, run_apply_host_update, ApplyError};
 pub use receipt::{
     HostLayout, HostUpdateReceiptV1, HostUpdateTransactionV1, LastKnownGoodV1, TxnPhase,
+    SIG_ALG_ED25519,
 };
 pub use rollback::{rollback, RollbackError};
 pub use stage::{
-    build_r5_archive, check_running_path, sign_test_archive, stage_archive, write_sig_file,
-    StageError,
+    build_r5_archive, check_running_path, clear_fixture_trust_env, fixture_key_id, fixture_keypair,
+    fixture_pubkey_hex, install_fixture_trust_env, sign_and_write_fixture_sig,
+    sign_archive_ed25519, stage_archive, target_compatible, write_sig_file, StageError,
 };
 
-use receipt::{now_rfc3339, sha256_file, CurrentHostV1, CURRENT_SCHEMA};
+use receipt::{now_rfc3339, sha256_file, validate_current_state, CurrentHostV1, CURRENT_SCHEMA};
 use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -149,9 +151,8 @@ fn run_update(args: &[String]) -> Result<(), UpdateError> {
         return Err(UpdateError::Usage);
     }
     let layout = HostLayout::resolve_current()?;
-    layout.ensure_dirs()?;
-    let _ = apply::recover_abandoned(&layout);
 
+    // --check is strictly read-only: no ensure_dirs, no recovery mutation.
     if check {
         let status = build_check_status(&layout)?;
         println!(
@@ -161,11 +162,13 @@ fn run_update(args: &[String]) -> Result<(), UpdateError> {
         return Ok(());
     }
 
+    layout.ensure_dirs()?;
+    let _ = apply::recover_abandoned(&layout);
+
     let target = to.ok_or(UpdateError::Usage)?;
     let archive_path = resolve_to_archive(&layout, &target)?;
-let enforce_path = std::env::var_os("ORCA_HOST_UPDATE_IN_PROCESS").is_none();
+    let enforce_path = std::env::var_os("ORCA_HOST_UPDATE_IN_PROCESS").is_none();
     let staged = stage_archive(&layout, &archive_path, None, enforce_path)?;
-    // Persist candidate receipt before promote.
     staged
         .receipt
         .write_atomic(&layout.receipt_path(&staged.receipt.receipt_digest))?;
@@ -177,6 +180,8 @@ let enforce_path = std::env::var_os("ORCA_HOST_UPDATE_IN_PROCESS").is_none();
         "archiveSha256": applied.archive_sha256,
         "receiptDigest": applied.receipt_digest,
         "installRoot": applied.install_root,
+        "signatureAlgorithm": applied.signature_algorithm,
+        "signatureKeyId": applied.signature_key_id,
     });
     println!(
         "{}",
@@ -214,16 +219,16 @@ fn run_rollback(args: &[String]) -> Result<(), UpdateError> {
 }
 
 fn build_check_status(layout: &HostLayout) -> Result<UpdateCheckStatus, UpdateError> {
-    let (version, archive_sha256, receipt_digest, binary_path) = if layout.current_path.is_file() {
-        let c = CurrentHostV1::load(&layout.current_path)?;
-        (
+    // Authenticate current state; forged/stale current fails closed.
+    let cur = validate_current_state(layout)?;
+    let (version, archive_sha256, receipt_digest, binary_path) = match cur {
+        Some(c) => (
             Some(c.version),
             Some(c.archive_sha256),
             Some(c.receipt_digest),
             Some(c.binary_path),
-        )
-    } else {
-        (None, None, None, None)
+        ),
+        None => (None, None, None, None),
     };
     let lkg = if layout.lkg_path.is_file() {
         LastKnownGoodV1::load(&layout.lkg_path)
@@ -252,7 +257,7 @@ fn resolve_to_archive(layout: &HostLayout, target: &str) -> Result<PathBuf, Upda
     if p.exists() && target.ends_with(".tar.gz") {
         return Ok(p.to_path_buf());
     }
-    // version lookup in retained archives via receipts
+    // version lookup in retained archives via receipts — require retained .sig
     if layout.receipts_dir.is_dir() {
         for ent in fs::read_dir(&layout.receipts_dir)? {
             let ent = ent?;
@@ -262,11 +267,15 @@ fn resolve_to_archive(layout: &HostLayout, target: &str) -> Result<PathBuf, Upda
             }
             if let Ok(r) = HostUpdateReceiptV1::load(&path) {
                 if r.version == target {
+                    if !target_compatible(&r.target) {
+                        return Err(UpdateError::Msg(format!(
+                            "incompatible retained target {}",
+                            r.target
+                        )));
+                    }
                     let ap = layout.archive_path(&r.archive_sha256);
-                    if ap.is_file() {
-                        // ensure sig
-                        let bytes = fs::read(&ap)?;
-                        let _ = write_sig_file(&ap, &bytes)?;
+                    let sp = layout.archive_sig_path(&r.archive_sha256);
+                    if ap.is_file() && sp.is_file() {
                         return Ok(ap);
                     }
                 }
@@ -274,7 +283,7 @@ fn resolve_to_archive(layout: &HostLayout, target: &str) -> Result<PathBuf, Upda
         }
     }
     Err(UpdateError::Msg(format!(
-        "update target not found: {target} (expected path.tar.gz or retained version)"
+        "update target not found: {target} (expected path.tar.gz or retained version with signature)"
     )))
 }
 
@@ -282,7 +291,10 @@ fn resolve_to_archive(layout: &HostLayout, target: &str) -> Result<PathBuf, Upda
 mod tests {
     use super::*;
     use crate::host_update::receipt::{host_bin_name, sha256_hex};
+    use std::sync::Mutex;
     use tempfile::tempdir;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn layout_at(root: &Path) -> HostLayout {
         let paths = xai_grok_config::OrcaPaths {
@@ -301,13 +313,15 @@ mod tests {
         let bytes = build_r5_archive(version, "test-any", payload).unwrap();
         let ap = dir.join(name);
         fs::write(&ap, &bytes).unwrap();
-        write_sig_file(&ap, &bytes).unwrap();
+        sign_and_write_fixture_sig(&ap, &bytes).unwrap();
         ap
     }
 
     #[test]
     fn va_to_vb_and_rollback() {
-        unsafe { std::env::set_var("ORCA_HOST_UPDATE_IN_PROCESS", "1"); }
+        let _g = ENV_LOCK.lock().unwrap();
+        install_fixture_trust_env();
+        unsafe { std::env::set_var("ORCA_HOST_UPDATE_IN_PROCESS", "1") };
         let dir = tempdir().unwrap();
         let layout = layout_at(dir.path());
         layout.ensure_dirs().unwrap();
@@ -320,10 +334,8 @@ mod tests {
             .unwrap();
         let ra = promote(&layout, &staged_a).unwrap();
         assert_eq!(ra.version, "0.0.0-test-a");
-        assert_eq!(
-            fs::read(&layout.managed_bin).unwrap(),
-            b"payload-va"
-        );
+        assert_eq!(fs::read(&layout.managed_bin).unwrap(), b"payload-va");
+        assert_eq!(ra.signature_algorithm, SIG_ALG_ED25519);
 
         let b = write_archive(dir.path(), "b.tar.gz", "0.0.0-test-b", b"payload-vb");
         let staged_b = stage_archive(&layout, &b, None, false).unwrap();
@@ -333,30 +345,73 @@ mod tests {
             .unwrap();
         let rb = promote(&layout, &staged_b).unwrap();
         assert_eq!(rb.version, "0.0.0-test-b");
-        assert_eq!(
-            fs::read(&layout.managed_bin).unwrap(),
-            b"payload-vb"
-        );
+        assert_eq!(fs::read(&layout.managed_bin).unwrap(), b"payload-vb");
 
-        // LKG should be va
         let lkg = LastKnownGoodV1::load(&layout.lkg_path).unwrap();
         assert_eq!(lkg.version, "0.0.0-test-a");
 
         let rolled = rollback(&layout, None).unwrap();
         assert_eq!(rolled.version, "0.0.0-test-a");
-        assert_eq!(
-            fs::read(&layout.managed_bin).unwrap(),
-            b"payload-va"
-        );
-        unsafe { std::env::remove_var("ORCA_HOST_UPDATE_IN_PROCESS"); }
+        assert_eq!(fs::read(&layout.managed_bin).unwrap(), b"payload-va");
+        unsafe { std::env::remove_var("ORCA_HOST_UPDATE_IN_PROCESS") };
+        clear_fixture_trust_env();
         let _ = host_bin_name();
         let _ = sha256_hex;
         let _ = sha256_file;
     }
 
     #[test]
+    fn check_is_readonly_no_dirs_created() {
+        let _g = ENV_LOCK.lock().unwrap();
+        clear_fixture_trust_env();
+        let dir = tempdir().unwrap();
+        let orca_home = dir.path().join("orca");
+        fs::create_dir_all(&orca_home).unwrap();
+        // Point ORCA_HOME at empty root — check must not create state trees.
+        unsafe { std::env::set_var("ORCA_HOME", &orca_home) };
+        let code = try_run_from_args(["update", "--check"]).unwrap();
+        assert_eq!(code, EXIT_OK);
+        let state_host = orca_home.join("state/host");
+        assert!(
+            !state_host.exists(),
+            "update --check must not create {}",
+            state_host.display()
+        );
+        let staging = orca_home.join("cache/host-staging");
+        assert!(!staging.exists(), "check must not create staging");
+        unsafe { std::env::remove_var("ORCA_HOME") };
+    }
+
+    #[test]
+    fn check_rejects_stale_forged_current() {
+        let _g = ENV_LOCK.lock().unwrap();
+        clear_fixture_trust_env();
+        let dir = tempdir().unwrap();
+        let orca_home = dir.path().join("orca");
+        let state_host = orca_home.join("state/host");
+        fs::create_dir_all(&state_host).unwrap();
+        // Forged current with nonexistent archive/receipt.
+        let forged = serde_json::json!({
+            "schemaVersion": 1,
+            "version": "0.0.0-stale",
+            "archiveSha256": "deadbeef",
+            "receiptDigest": "cafebabe",
+            "binaryPath": "/nope",
+            "updatedAt": "1970-01-01T00:00:00Z"
+        });
+        fs::write(
+            state_host.join("current.json"),
+            serde_json::to_vec_pretty(&forged).unwrap(),
+        )
+        .unwrap();
+        unsafe { std::env::set_var("ORCA_HOME", &orca_home) };
+        let code = try_run_from_args(["update", "--check"]).unwrap();
+        assert_eq!(code, EXIT_ERR, "stale current must fail closed");
+        unsafe { std::env::remove_var("ORCA_HOME") };
+    }
+
+    #[test]
     fn try_run_check_smoke() {
-        // Without ORCA_HOME this still resolves; just ensure non-update args return None.
         assert!(try_run_from_args(["not-update"]).is_none());
         assert!(try_run_from_args(["import", "grok"]).is_none());
     }
