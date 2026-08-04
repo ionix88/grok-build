@@ -1,4 +1,4 @@
-// allow: SIZE_OK — plan Task 16 owns host receipt/LKG/transaction schemas.
+// allow: SIZE_OK — plan Task 16 owns host receipt/LKG/transaction + release-key table.
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -6,14 +6,21 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
-use xai_grok_config::{resolve_orca_paths_current, OrcaPathEnv, OrcaPaths, OrcaPlatform};
+use xai_grok_config::{
+    resolve_orca_paths, resolve_orca_paths_current, OrcaPathEnv, OrcaPaths, OrcaPlatform,
+};
 
 pub const RECEIPT_SCHEMA: u32 = 1;
 pub const LKG_SCHEMA: u32 = 1;
 pub const TXN_SCHEMA: u32 = 1;
 pub const CURRENT_SCHEMA: u32 = 1;
 pub const ARCHIVE_FORMAT_ID: &str = "tar-gzip-rfc1952-ustar-v1";
-pub const TEST_SIG_ALGORITHM: &str = "test-only-sha512-v1";
+pub const SIG_ALG_ED25519: &str = "ed25519-detached-v1";
+
+/// Pinned Orca release Ed25519 public keys `(key_id, raw 32 bytes)`.
+/// Empty ships dark: public update returns EXTERNAL_REQUIRED(signing-key).
+/// Fixture/test keys must never appear here.
+pub const ORCA_RELEASE_ED25519_PUBKEYS: &[(&str, &[u8; 32])] = &[];
 
 #[derive(Debug, Error)]
 pub enum ReceiptError {
@@ -29,6 +36,12 @@ pub enum ReceiptError {
     VersionByteConflict(String),
     #[error("path: {0}")]
     Path(String),
+    #[error("stale or unauthenticated host state: {0}")]
+    StaleState(String),
+    #[error("EXTERNAL_REQUIRED(signing-key)")]
+    ExternalRequiredSigningKey,
+    #[error("signature: {0}")]
+    Signature(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -50,6 +63,7 @@ pub struct HostUpdateReceiptV1 {
     pub archive_sha256: String,
     pub archive_format: String,
     pub signature_algorithm: String,
+    pub signature_key_id: String,
     pub signature_sha256: String,
     pub install_root: String,
     pub files: Vec<HostFileEntry>,
@@ -60,7 +74,8 @@ pub struct HostUpdateReceiptV1 {
 
 impl HostUpdateReceiptV1 {
     pub fn seal(mut self) -> Result<Self, ReceiptError> {
-        self.files.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
+        self.files
+            .sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
         self.receipt_digest.clear();
         let bytes = serde_json::to_vec(&self).map_err(|e| ReceiptError::Json(e.to_string()))?;
         self.receipt_digest = sha256_hex(&bytes);
@@ -68,16 +83,19 @@ impl HostUpdateReceiptV1 {
     }
 
     pub fn write_atomic(&self, path: &Path) -> Result<(), ReceiptError> {
-        let bytes = serde_json::to_vec_pretty(self).map_err(|e| ReceiptError::Json(e.to_string()))?;
+        let bytes =
+            serde_json::to_vec_pretty(self).map_err(|e| ReceiptError::Json(e.to_string()))?;
         write_atomic(path, &bytes)
     }
 
     pub fn load(path: &Path) -> Result<Self, ReceiptError> {
         let bytes = fs::read(path)?;
-        let r: Self = serde_json::from_slice(&bytes).map_err(|e| ReceiptError::Json(e.to_string()))?;
+        let r: Self =
+            serde_json::from_slice(&bytes).map_err(|e| ReceiptError::Json(e.to_string()))?;
         let mut tmp = r.clone();
         tmp.receipt_digest.clear();
-        let got = sha256_hex(&serde_json::to_vec(&tmp).map_err(|e| ReceiptError::Json(e.to_string()))?);
+        let got =
+            sha256_hex(&serde_json::to_vec(&tmp).map_err(|e| ReceiptError::Json(e.to_string()))?);
         if got != r.receipt_digest {
             return Err(ReceiptError::DigestMismatch);
         }
@@ -97,7 +115,8 @@ pub struct LastKnownGoodV1 {
 
 impl LastKnownGoodV1 {
     pub fn write_atomic(&self, path: &Path) -> Result<(), ReceiptError> {
-        let bytes = serde_json::to_vec_pretty(self).map_err(|e| ReceiptError::Json(e.to_string()))?;
+        let bytes =
+            serde_json::to_vec_pretty(self).map_err(|e| ReceiptError::Json(e.to_string()))?;
         write_atomic(path, &bytes)
     }
     pub fn load(path: &Path) -> Result<Self, ReceiptError> {
@@ -119,7 +138,8 @@ pub struct CurrentHostV1 {
 
 impl CurrentHostV1 {
     pub fn write_atomic(&self, path: &Path) -> Result<(), ReceiptError> {
-        let bytes = serde_json::to_vec_pretty(self).map_err(|e| ReceiptError::Json(e.to_string()))?;
+        let bytes =
+            serde_json::to_vec_pretty(self).map_err(|e| ReceiptError::Json(e.to_string()))?;
         write_atomic(path, &bytes)
     }
     pub fn load(path: &Path) -> Result<Self, ReceiptError> {
@@ -164,7 +184,8 @@ impl HostUpdateTransactionV1 {
         self.updated_at = now_rfc3339();
     }
     pub fn write_atomic(&self, path: &Path) -> Result<(), ReceiptError> {
-        let bytes = serde_json::to_vec_pretty(self).map_err(|e| ReceiptError::Json(e.to_string()))?;
+        let bytes =
+            serde_json::to_vec_pretty(self).map_err(|e| ReceiptError::Json(e.to_string()))?;
         write_atomic(path, &bytes)
     }
     pub fn load(path: &Path) -> Result<Self, ReceiptError> {
@@ -244,6 +265,10 @@ impl HostLayout {
     pub fn archive_path(&self, sha: &str) -> PathBuf {
         self.archives_dir.join(format!("{sha}.tar.gz"))
     }
+
+    pub fn archive_sig_path(&self, sha: &str) -> PathBuf {
+        self.archives_dir.join(format!("{sha}.tar.gz.sig"))
+    }
 }
 
 pub fn host_bin_name() -> &'static str {
@@ -297,7 +322,6 @@ pub fn now_rfc3339() -> String {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    // Compact deterministic-enough timestamp for receipts (not wall-clock critical).
     format!("1970-01-01T00:00:{secs:02}Z")
 }
 
@@ -323,20 +347,151 @@ pub fn check_version_byte_conflict(
     if !layout.current_path.is_file() {
         return Ok(());
     }
-    let cur = CurrentHostV1::load(&layout.current_path)?;
+    let cur = match CurrentHostV1::load(&layout.current_path) {
+        Ok(c) => c,
+        Err(_) => return Ok(()), // stale current handled by check path
+    };
     if cur.version == candidate_version && cur.archive_sha256 != candidate_archive_sha {
         return Err(ReceiptError::VersionByteConflict(candidate_version.into()));
     }
     Ok(())
 }
 
-/// Test helper: build layout under an absolute ORCA_HOME root.
+/// Trusted keys for verification: production pins, plus optional test override.
+pub fn trusted_release_keys() -> Vec<(String, [u8; 32])> {
+    let mut keys: Vec<(String, [u8; 32])> = ORCA_RELEASE_ED25519_PUBKEYS
+        .iter()
+        .map(|(id, k)| ((*id).to_string(), **k))
+        .collect();
+    // Test-only injection: 64 hex chars = 32 bytes. Never a production pin.
+    if let Ok(hex) = std::env::var("ORCA_HOST_UPDATE_TEST_PUBKEY_HEX") {
+        if let Some(raw) = parse_hex32(&hex) {
+            let id = std::env::var("ORCA_HOST_UPDATE_TEST_KEY_ID")
+                .unwrap_or_else(|_| format!("sha256:{}", sha256_hex(&raw)));
+            keys.push((id, raw));
+        }
+    }
+    keys
+}
+
+pub fn release_keys_provisioned() -> bool {
+    !trusted_release_keys().is_empty()
+}
+
+fn parse_hex32(s: &str) -> Option<[u8; 32]> {
+    let s = s.trim();
+    if s.len() != 64 {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    for i in 0..32 {
+        out[i] = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).ok()?;
+    }
+    Some(out)
+}
+
+/// Verify detached Ed25519 signature over exact archive bytes.
+pub fn verify_ed25519_detached(
+    archive: &[u8],
+    signature: &[u8],
+    key_id: &str,
+) -> Result<(), ReceiptError> {
+    if signature.len() != 64 {
+        return Err(ReceiptError::Signature("signature must be 64 bytes".into()));
+    }
+    let keys = trusted_release_keys();
+    if keys.is_empty() {
+        return Err(ReceiptError::ExternalRequiredSigningKey);
+    }
+    let pk = keys
+        .iter()
+        .find(|(id, _)| id == key_id)
+        .map(|(_, k)| k)
+        .or_else(|| {
+            // If single key and key_id empty/default, use it.
+            if keys.len() == 1 && (key_id.is_empty() || key_id == "default") {
+                Some(&keys[0].1)
+            } else {
+                None
+            }
+        })
+        .ok_or_else(|| ReceiptError::Signature(format!("unknown key_id {key_id}")))?;
+    let unparsed =
+        ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, pk.as_slice());
+    unparsed
+        .verify(archive, signature)
+        .map_err(|_| ReceiptError::Signature("ed25519 verification failed".into()))
+}
+
+/// Authenticate current host state for `--check` (read-only, fail-closed on drift).
+pub fn validate_current_state(layout: &HostLayout) -> Result<Option<CurrentHostV1>, ReceiptError> {
+    if !layout.current_path.is_file() {
+        return Ok(None);
+    }
+    let cur = CurrentHostV1::load(&layout.current_path)
+        .map_err(|e| ReceiptError::StaleState(format!("current.json: {e}")))?;
+    let rpath = layout.receipt_path(&cur.receipt_digest);
+    if !rpath.is_file() {
+        return Err(ReceiptError::StaleState(
+            "receipt missing for current".into(),
+        ));
+    }
+    let receipt = HostUpdateReceiptV1::load(&rpath)
+        .map_err(|e| ReceiptError::StaleState(format!("receipt: {e}")))?;
+    if receipt.receipt_digest != cur.receipt_digest
+        || receipt.version != cur.version
+        || receipt.archive_sha256 != cur.archive_sha256
+    {
+        return Err(ReceiptError::StaleState(
+            "current.json does not match receipt".into(),
+        ));
+    }
+    let ap = layout.archive_path(&cur.archive_sha256);
+    if !ap.is_file() {
+        return Err(ReceiptError::StaleState(
+            "archive missing for current".into(),
+        ));
+    }
+    let got = sha256_file(&ap)?;
+    if got != cur.archive_sha256 {
+        return Err(ReceiptError::StaleState("archive digest drift".into()));
+    }
+    // Signature must still verify against pinned keys when provisioned.
+    let sp = layout.archive_sig_path(&cur.archive_sha256);
+    if sp.is_file() {
+        let archive = fs::read(&ap)?;
+        let sig = fs::read(&sp)?;
+        verify_ed25519_detached(&archive, &sig, &receipt.signature_key_id)?;
+    } else if release_keys_provisioned() {
+        return Err(ReceiptError::StaleState(
+            "detached signature missing for current archive".into(),
+        ));
+    }
+    if layout.managed_bin.is_file() {
+        let bin = fs::read(&layout.managed_bin)?;
+        let bin_sha = sha256_hex(&bin);
+        let expect = receipt
+            .files
+            .iter()
+            .find(|f| f.relative_path == host_bin_name() || f.relative_path == "orca")
+            .map(|f| f.content_sha256.as_str());
+        if let Some(exp) = expect {
+            if exp != bin_sha {
+                return Err(ReceiptError::StaleState(
+                    "managed binary digest drift".into(),
+                ));
+            }
+        }
+    }
+    Ok(Some(cur))
+}
+
 pub fn test_layout(orca_home: &Path) -> Result<HostLayout, ReceiptError> {
     let env = OrcaPathEnv {
         orca_home: Some(orca_home.to_path_buf()),
         ..Default::default()
     };
-    let paths = xai_grok_config::resolve_orca_paths(OrcaPlatform::Macos, &env)
+    let paths = resolve_orca_paths(OrcaPlatform::Macos, &env)
         .map_err(|e| ReceiptError::Path(e.to_string()))?;
     let install = paths.config_file.parent().unwrap().join("bin");
     Ok(HostLayout::from_paths(&paths, install))
