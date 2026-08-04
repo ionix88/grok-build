@@ -1,14 +1,15 @@
 // allow: SIZE_OK — plan Task 16 owns R5 archive stage/verify + fixture builders.
-//! Stage and verify R5 host archives (ustar+gzip FLG=0). Never promotes.
+//! Stage and verify R5 host archives (ustar+gzip level-9). Never promotes.
 
 use super::receipt::{
     self, check_version_byte_conflict, host_bin_name, host_target_triple, now_rfc3339,
-    sha256_hex, HostFileEntry, HostLayout, HostUpdateReceiptV1, HostUpdateTransactionV1, TxnPhase,
-    ARCHIVE_FORMAT_ID, RECEIPT_SCHEMA, TEST_SIG_ALGORITHM, TXN_SCHEMA,
+    release_keys_provisioned, sha256_hex, trusted_release_keys, verify_ed25519_detached,
+    HostFileEntry, HostLayout, HostUpdateReceiptV1, HostUpdateTransactionV1, TxnPhase,
+    ARCHIVE_FORMAT_ID, RECEIPT_SCHEMA, SIG_ALG_ED25519, TXN_SCHEMA,
 };
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io;
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
@@ -21,11 +22,13 @@ pub enum StageError {
     #[error("io: {0}")]
     Io(#[from] io::Error),
     #[error("receipt: {0}")]
-    Receipt(#[from] receipt::ReceiptError),
+    Receipt(receipt::ReceiptError),
     #[error("bad archive: {0}")]
     BadArchive(String),
     #[error("bad signature: {0}")]
     BadSignature(String),
+    #[error("EXTERNAL_REQUIRED(signing-key)")]
+    ExternalRequiredSigningKey,
     #[error("target mismatch: want {want}, got {got}")]
     TargetMismatch { want: String, got: String },
     #[error("running path mismatch: exe={exe}, managed={managed}")]
@@ -36,6 +39,18 @@ pub enum StageError {
     Manifest(String),
     #[error("not found: {0}")]
     NotFound(String),
+}
+
+impl From<receipt::ReceiptError> for StageError {
+    fn from(e: receipt::ReceiptError) -> Self {
+        match e {
+            receipt::ReceiptError::ExternalRequiredSigningKey => {
+                StageError::ExternalRequiredSigningKey
+            }
+            receipt::ReceiptError::Signature(m) => StageError::BadSignature(m),
+            other => StageError::Receipt(other),
+        }
+    }
 }
 
 /// Host-manifest.json inside the archive. Do NOT embed archiveSha256 (chicken-egg).
@@ -65,6 +80,7 @@ pub struct StagedUpdate {
     pub staged_bin: PathBuf,
     pub archive_sha256: String,
     pub txn_path: PathBuf,
+    pub signature_key_id: String,
 }
 
 /// Stage a verified R5 archive for promotion. Leaves phase=Staged; does not replace install_root.
@@ -85,7 +101,7 @@ pub fn stage_archive(
     }
     let archive_sha256 = sha256_hex(&archive_bytes);
 
-    verify_detached_sig(&archive_bytes, archive_path, sig_path)?;
+    let (sig_bytes, key_id) = verify_detached_sig(&archive_bytes, archive_path, sig_path)?;
 
     let entries = extract_ustar_gz(&archive_bytes)?;
     let manifest = parse_manifest(&entries)?;
@@ -95,15 +111,11 @@ pub fn stage_archive(
             manifest.product
         )));
     }
-    let want_target = host_target_triple();
-    if manifest.target != want_target && manifest.target != "any" && !manifest.target.is_empty() {
-        // Allow test targets that start with "test-"
-        if !manifest.target.starts_with("test-") {
-            return Err(StageError::TargetMismatch {
-                want: want_target,
-                got: manifest.target,
-            });
-        }
+    if !target_compatible(&manifest.target) {
+        return Err(StageError::TargetMismatch {
+            want: host_target_triple(),
+            got: manifest.target,
+        });
     }
 
     match check_version_byte_conflict(layout, &manifest.version, &archive_sha256) {
@@ -117,7 +129,7 @@ pub fn stage_archive(
     verify_entries_match_manifest(&entries, &manifest)?;
 
     let bin_name = host_bin_name();
-    let bin_entry = entries
+    let _bin_entry = entries
         .iter()
         .find(|e| e.path == "orca" || e.path == bin_name)
         .ok_or_else(|| StageError::BadArchive("missing orca binary entry".into()))?;
@@ -129,7 +141,6 @@ pub fn stage_archive(
     }
     fs::create_dir_all(&staged_root)?;
 
-    // Extract relative to staged_root (install_root is already bin/).
     for e in &entries {
         if e.path == "host-manifest.json" {
             let p = staged_root.join("host-manifest.json");
@@ -152,10 +163,14 @@ pub fn stage_archive(
         set_mode(&dest, &mode_for_path(&rel, &manifest))?;
     }
 
-    // Retain archive bytes under state/host/archives.
+    // Retain archive + detached signature under state/host/archives.
     let retained = layout.archive_path(&archive_sha256);
     if !retained.exists() {
         fs::write(&retained, &archive_bytes)?;
+    }
+    let retained_sig = layout.archive_sig_path(&archive_sha256);
+    if !retained_sig.exists() {
+        fs::write(&retained_sig, &sig_bytes)?;
     }
 
     let files: Vec<HostFileEntry> = manifest
@@ -174,7 +189,7 @@ pub fn stage_archive(
         })
         .collect();
 
-    let sig_hex = sha256_hex(&sign_test_archive(&archive_bytes));
+    let sig_hex = sha256_hex(&sig_bytes);
     let receipt = HostUpdateReceiptV1 {
         schema_version: RECEIPT_SCHEMA,
         product: "orca".into(),
@@ -182,7 +197,8 @@ pub fn stage_archive(
         target: manifest.target.clone(),
         archive_sha256: archive_sha256.clone(),
         archive_format: ARCHIVE_FORMAT_ID.into(),
-        signature_algorithm: TEST_SIG_ALGORITHM.into(),
+        signature_algorithm: SIG_ALG_ED25519.into(),
+        signature_key_id: key_id.clone(),
         signature_sha256: sig_hex,
         install_root: layout.install_root.display().to_string(),
         files,
@@ -211,7 +227,6 @@ pub fn stage_archive(
         updated_at: now_rfc3339(),
         error: None,
     };
-    // Crash at Staged abandons to old host — phase Staged means not yet applying.
     txn.set_phase(TxnPhase::Staged);
     let txn_path = layout.txn_path(&txn_id);
     txn.write_atomic(&txn_path)?;
@@ -223,7 +238,14 @@ pub fn stage_archive(
         staged_bin,
         archive_sha256,
         txn_path,
+        signature_key_id: key_id,
     })
+}
+
+/// Host target match: exact triple, `any`, empty, or `test-*` fixture targets.
+pub fn target_compatible(target: &str) -> bool {
+    let want = host_target_triple();
+    target == want || target == "any" || target.is_empty() || target.starts_with("test-")
 }
 
 struct CurrentOptional;
@@ -257,10 +279,7 @@ fn set_mode(path: &Path, mode_octal: &str) -> Result<(), StageError> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let mode = u32::from_str_radix(mode_octal.trim_start_matches('0').get(..).unwrap_or("644"), 8)
-            .unwrap_or(0o644);
-        // If parse of full 4-digit
-        let mode = u32::from_str_radix(mode_octal, 8).unwrap_or(mode);
+        let mode = u32::from_str_radix(mode_octal, 8).unwrap_or(0o644);
         fs::set_permissions(path, fs::Permissions::from_mode(mode))?;
     }
     let _ = (path, mode_octal);
@@ -283,11 +302,16 @@ pub fn check_running_path(layout: &HostLayout) -> Result<(), StageError> {
     Ok(())
 }
 
+/// Verify detached Ed25519 `.sig` against pinned release keys (or test override).
+/// Returns `(signature_bytes, key_id)`.
 fn verify_detached_sig(
     archive_bytes: &[u8],
     archive_path: &Path,
     sig_path: Option<&Path>,
-) -> Result<(), StageError> {
+) -> Result<(Vec<u8>, String), StageError> {
+    if !release_keys_provisioned() {
+        return Err(StageError::ExternalRequiredSigningKey);
+    }
     let default_sig = {
         let mut p = archive_path.as_os_str().to_os_string();
         p.push(".sig");
@@ -301,35 +325,108 @@ fn verify_detached_sig(
         return Err(StageError::BadSignature("missing .sig".into()));
     }
     let sig = fs::read(&path)?;
-    let expect = sign_test_archive(archive_bytes);
-    if sig.as_slice() != expect.as_slice() {
-        return Err(StageError::BadSignature("detached signature mismatch".into()));
+    if sig.len() != 64 {
+        return Err(StageError::BadSignature(
+            "signature must be 64 bytes".into(),
+        ));
     }
-    Ok(())
+    // Prefer companion key-id file; else try each trusted key.
+    let kid_path = {
+        let mut p = path.as_os_str().to_os_string();
+        p.push(".keyid");
+        PathBuf::from(p)
+    };
+    if kid_path.is_file() {
+        let key_id = fs::read_to_string(&kid_path)?.trim().to_string();
+        verify_ed25519_detached(archive_bytes, &sig, &key_id)?;
+        return Ok((sig, key_id));
+    }
+    let keys = trusted_release_keys();
+    for (id, _) in &keys {
+        if verify_ed25519_detached(archive_bytes, &sig, id).is_ok() {
+            return Ok((sig, id.clone()));
+        }
+    }
+    Err(StageError::BadSignature(
+        "detached Ed25519 signature mismatch".into(),
+    ))
 }
 
-/// Test-only detached signature: 64 bytes from two SHA-256 rounds (algorithm test-only-sha512-v1).
-pub fn sign_test_archive(archive_bytes: &[u8]) -> [u8; 64] {
-    let h1 = {
-        use sha2::{Digest, Sha256};
-        let mut d = Sha256::new();
-        d.update(archive_bytes);
-        d.finalize()
-    };
-    let h2 = {
-        use sha2::{Digest, Sha256};
-        let mut d = Sha256::new();
-        d.update(b"test-only-sha512-v1");
-        d.update(&h1);
-        d.finalize()
-    };
+/// Write raw 64-byte Ed25519 signature (+ optional key id sidecar).
+pub fn write_sig_file(
+    archive_path: &Path,
+    signature: &[u8],
+    key_id: &str,
+) -> Result<PathBuf, StageError> {
+    if signature.len() != 64 {
+        return Err(StageError::BadSignature(
+            "signature must be 64 bytes".into(),
+        ));
+    }
+    let mut p = archive_path.as_os_str().to_os_string();
+    p.push(".sig");
+    let path = PathBuf::from(p);
+    fs::write(&path, signature)?;
+    let mut kid = path.as_os_str().to_os_string();
+    kid.push(".keyid");
+    fs::write(PathBuf::from(kid), key_id.as_bytes())?;
+    Ok(path)
+}
+
+/// Sign archive bytes with an Ed25519 keypair (test/fixture helper; never production keys).
+pub fn sign_archive_ed25519(
+    archive_bytes: &[u8],
+    keypair: &ring::signature::Ed25519KeyPair,
+) -> [u8; 64] {
+    let sig = keypair.sign(archive_bytes);
     let mut out = [0u8; 64];
-    out[..32].copy_from_slice(&h1);
-    out[32..].copy_from_slice(&h2);
+    out.copy_from_slice(sig.as_ref());
     out
 }
 
-// --- R5 ustar + gzip (store deflate) ---
+/// Deterministic fixture keypair seed (test-only; never a production pin).
+pub const FIXTURE_SEED: [u8; 32] = *b"orca-host-upd-test-seed-v1!!!!!!";
+
+pub fn fixture_keypair() -> ring::signature::Ed25519KeyPair {
+    ring::signature::Ed25519KeyPair::from_seed_unchecked(&FIXTURE_SEED)
+        .expect("fixture seed is valid ed25519 seed")
+}
+
+pub fn fixture_pubkey_hex() -> String {
+    use ring::signature::KeyPair;
+    hex_of(fixture_keypair().public_key().as_ref())
+}
+
+pub fn fixture_key_id() -> String {
+    use ring::signature::KeyPair;
+    format!(
+        "sha256:{}",
+        sha256_hex(fixture_keypair().public_key().as_ref())
+    )
+}
+
+fn hex_of(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        out.push(HEX[(b >> 4) as usize] as char);
+        out.push(HEX[(b & 0xf) as usize] as char);
+    }
+    out
+}
+
+/// Install fixture pubkey into process env for the duration of tests.
+pub fn install_fixture_trust_env() {
+    unsafe { std::env::set_var("ORCA_HOST_UPDATE_TEST_PUBKEY_HEX", fixture_pubkey_hex()) };
+    unsafe { std::env::set_var("ORCA_HOST_UPDATE_TEST_KEY_ID", fixture_key_id()) };
+}
+
+pub fn clear_fixture_trust_env() {
+    unsafe { std::env::remove_var("ORCA_HOST_UPDATE_TEST_PUBKEY_HEX") };
+    unsafe { std::env::remove_var("ORCA_HOST_UPDATE_TEST_KEY_ID") };
+}
+
+// --- R5 ustar + gzip level 9 ---
 
 #[derive(Clone)]
 struct TarEntry {
@@ -339,37 +436,25 @@ struct TarEntry {
     is_dir: bool,
 }
 
-/// Build a deterministic R5 archive for tests. Entries use relative path "orca" (not "bin/orca").
-pub fn build_r5_archive(version: &str, target: &str, orca_bytes: &[u8]) -> Result<Vec<u8>, StageError> {
-    let orca_hash = sha256_hex(orca_bytes);
-    let manifest = HostManifestV1 {
+/// Build a deterministic R5 archive (USTAR + gzip level 9, FLG=0 MTIME=0 XFL=2 OS=255).
+pub fn build_r5_archive(
+    version: &str,
+    target: &str,
+    orca_bytes: &[u8],
+) -> Result<Vec<u8>, StageError> {
+    let mut manifest = HostManifestV1 {
         schema_version: 1,
         product: "orca".into(),
         version: version.into(),
         target: target.into(),
-        entries: vec![
-            HostManifestEntry {
-                relative_path: "host-manifest.json".into(),
-                mode_octal: "0644".into(),
-                length: 0, // filled after
-                content_sha256: String::new(),
-            },
-            HostManifestEntry {
-                relative_path: "orca".into(),
-                mode_octal: "0755".into(),
-                length: orca_bytes.len() as u64,
-                content_sha256: orca_hash,
-            },
-        ],
+        entries: vec![HostManifestEntry {
+            relative_path: "orca".into(),
+            mode_octal: "0755".into(),
+            length: orca_bytes.len() as u64,
+            content_sha256: sha256_hex(orca_bytes),
+        }],
     };
-    // Manifest without self hash first — finalize lengths
-    let mut manifest = manifest;
-manifest.entries = vec![HostManifestEntry {
-        relative_path: "orca".into(),
-        mode_octal: "0755".into(),
-        length: orca_bytes.len() as u64,
-        content_sha256: sha256_hex(orca_bytes),
-    }];
+    let _ = &mut manifest;
     let man_json =
         serde_json::to_vec_pretty(&manifest).map_err(|e| StageError::Manifest(e.to_string()))?;
 
@@ -389,16 +474,18 @@ manifest.entries = vec![HostManifestEntry {
     ];
     tar_entries.sort_by(|a, b| a.path.cmp(&b.path));
     let tar = write_ustar(&tar_entries)?;
-    Ok(gzip_store(&tar))
+    gzip_level9(&tar)
 }
 
-pub fn write_sig_file(archive_path: &Path, archive_bytes: &[u8]) -> Result<PathBuf, StageError> {
-    let sig = sign_test_archive(archive_bytes);
-    let mut p = archive_path.as_os_str().to_os_string();
-    p.push(".sig");
-    let path = PathBuf::from(p);
-    fs::write(&path, sig)?;
-    Ok(path)
+/// Sign + write `.sig` for a fixture archive using the deterministic fixture key.
+pub fn sign_and_write_fixture_sig(
+    archive_path: &Path,
+    archive_bytes: &[u8],
+) -> Result<PathBuf, StageError> {
+    install_fixture_trust_env();
+    let kp = fixture_keypair();
+    let sig = sign_archive_ed25519(archive_bytes, &kp);
+    write_sig_file(archive_path, &sig, &fixture_key_id())
 }
 
 fn write_ustar(entries: &[TarEntry]) -> Result<Vec<u8>, StageError> {
@@ -410,26 +497,22 @@ fn write_ustar(entries: &[TarEntry]) -> Result<Vec<u8>, StageError> {
             return Err(StageError::BadArchive("path too long for ustar".into()));
         }
         hdr[..name.len()].copy_from_slice(name);
-        let mode = if e.is_dir { e.mode } else { e.mode };
-        write_octal(&mut hdr[100..108], mode as u64, 7);
-        write_octal(&mut hdr[108..116], 0, 7); // uid
-        write_octal(&mut hdr[116..124], 0, 7); // gid
+        let mode = e.mode;
+        write_octal(&mut hdr[100..108], u64::from(mode), 7);
+        write_octal(&mut hdr[108..116], 0, 7);
+        write_octal(&mut hdr[116..124], 0, 7);
         write_octal(&mut hdr[124..136], e.data.len() as u64, 11);
-        write_octal(&mut hdr[136..148], 0, 11); // mtime
-        // checksum placeholder spaces
+        write_octal(&mut hdr[136..148], 0, 11);
         for b in &mut hdr[148..156] {
             *b = b' ';
         }
         hdr[156] = if e.is_dir { b'5' } else { b'0' };
-        // magic ustar
         hdr[257..263].copy_from_slice(b"ustar\0");
         hdr[263..265].copy_from_slice(b"00");
-        // empty uname/gname
         let mut sum: u32 = 0;
         for b in &hdr {
-            sum += *b as u32;
+            sum += u32::from(*b);
         }
-        // checksum is 6 octal digits + NUL + space
         let cstr = format!("{sum:06o}");
         hdr[148..154].copy_from_slice(cstr.as_bytes());
         hdr[154] = 0;
@@ -439,7 +522,6 @@ fn write_ustar(entries: &[TarEntry]) -> Result<Vec<u8>, StageError> {
         let pad = (512 - (e.data.len() % 512)) % 512;
         out.extend(std::iter::repeat_n(0u8, pad));
     }
-    // two zero blocks
     out.extend(std::iter::repeat_n(0u8, 1024));
     Ok(out)
 }
@@ -454,56 +536,34 @@ fn write_octal(dst: &mut [u8], val: u64, digits: usize) {
     }
 }
 
-/// Gzip one member, FLG=0, MTIME=0, XFL=2, OS=255, store (non-compressed) deflate blocks.
-fn gzip_store(data: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(data.len() + 64 + data.len() / 65535 * 5);
-    // header
-    out.extend_from_slice(&[0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 2, 255]);
-    // deflate stored blocks
-    let mut pos = 0;
-    while pos < data.len() {
-        let remaining = data.len() - pos;
-        let chunk = remaining.min(65535);
-        let is_last = pos + chunk >= data.len();
-        let bfinal = if is_last { 1u8 } else { 0u8 };
-        out.push(bfinal); // BTYPE=00 in low bits with bfinal
-        let len = chunk as u16;
-        let nlen = !len;
-        out.push((len & 0xff) as u8);
-        out.push((len >> 8) as u8);
-        out.push((nlen & 0xff) as u8);
-        out.push((nlen >> 8) as u8);
-        out.extend_from_slice(&data[pos..pos + chunk]);
-        pos += chunk;
+/// Gzip one member at level 9: FLG=0, MTIME=0, XFL=2, OS=255.
+fn gzip_level9(data: &[u8]) -> Result<Vec<u8>, StageError> {
+    use flate2::write::GzEncoder;
+    use flate2::{Compression, GzBuilder};
+    let enc = GzBuilder::new()
+        .mtime(0)
+        .operating_system(255)
+        .write(Vec::new(), Compression::new(9));
+    let mut enc: GzEncoder<Vec<u8>> = enc;
+    enc.write_all(data)
+        .map_err(|e| StageError::BadArchive(format!("gzip encode: {e}")))?;
+    let mut out = enc
+        .finish()
+        .map_err(|e| StageError::BadArchive(format!("gzip finish: {e}")))?;
+    // Force XFL=2 (max compression) per R5 — flate2 may leave 0.
+    if out.len() >= 10 {
+        out[8] = 2;
     }
-    if data.is_empty() {
-        out.push(1); // final empty stored
-        out.extend_from_slice(&[0, 0, 0xff, 0xff]);
-    }
-    let crc = crc32_ieee(data);
-    out.extend_from_slice(&crc.to_le_bytes());
-    out.extend_from_slice(&(data.len() as u32).to_le_bytes());
-    out
-}
-
-fn crc32_ieee(data: &[u8]) -> u32 {
-    let mut crc: u32 = 0xffff_ffff;
-    for &b in data {
-        crc ^= b as u32;
-        for _ in 0..8 {
-            let mask = (crc & 1).wrapping_neg();
-            crc = (crc >> 1) ^ (0xedb8_8320 & mask);
-        }
-    }
-    !crc
+    Ok(out)
 }
 
 fn extract_ustar_gz(archive: &[u8]) -> Result<Vec<TarEntry>, StageError> {
-    let tar = gunzip_store(archive)?;
+    let tar = gunzip_r5(archive)?;
     parse_ustar(&tar)
 }
 
-fn gunzip_store(gz: &[u8]) -> Result<Vec<u8>, StageError> {
+/// Accept R5 single-member gzip (level-9 deflate or stored), FLG=0 MTIME=0 OS=255.
+fn gunzip_r5(gz: &[u8]) -> Result<Vec<u8>, StageError> {
     if gz.len() < 18 {
         return Err(StageError::BadArchive("gzip too short".into()));
     }
@@ -514,53 +574,35 @@ fn gunzip_store(gz: &[u8]) -> Result<Vec<u8>, StageError> {
     if flg != 0 {
         return Err(StageError::BadArchive(format!("gzip FLG={flg} want 0")));
     }
-    // skip 10-byte header
-    let mut i = 10usize;
+    if gz[4..8] != [0, 0, 0, 0] {
+        return Err(StageError::BadArchive("gzip MTIME must be 0".into()));
+    }
+    // XFL: 2 = max compression (R5 level 9); 0/4 also RFC-valid for store/fast.
+    let xfl = gz[8];
+    if xfl != 2 && xfl != 0 && xfl != 4 {
+        return Err(StageError::BadArchive(format!(
+            "gzip XFL={xfl} unsupported"
+        )));
+    }
+    if gz[9] != 255 {
+        return Err(StageError::BadArchive(format!(
+            "gzip OS={} want 255",
+            gz[9]
+        )));
+    }
+
+    use flate2::read::GzDecoder;
+    use std::io::Cursor;
+    let mut cursor = Cursor::new(gz);
     let mut out = Vec::new();
-    loop {
-        if i >= gz.len() {
-            return Err(StageError::BadArchive("truncated deflate".into()));
-        }
-        let hdr = gz[i];
-        i += 1;
-        let bfinal = hdr & 1;
-        let btype = (hdr >> 1) & 3;
-        if btype != 0 {
-            return Err(StageError::BadArchive(format!(
-                "unsupported deflate BTYPE={btype} (fixtures use store)"
-            )));
-        }
-        if i + 4 > gz.len() {
-            return Err(StageError::BadArchive("truncated stored block".into()));
-        }
-        let len = u16::from_le_bytes([gz[i], gz[i + 1]]) as usize;
-        let nlen = u16::from_le_bytes([gz[i + 2], gz[i + 3]]) as usize;
-        i += 4;
-        if (nlen as u16) != (!(len as u16)) {
-            return Err(StageError::BadArchive("stored LEN/NLEN mismatch".into()));
-        }
-        if i + len > gz.len() {
-            return Err(StageError::BadArchive("stored block OOB".into()));
-        }
-        out.extend_from_slice(&gz[i..i + len]);
-        i += len;
-        if bfinal == 1 {
-            break;
-        }
+    {
+        let mut dec = GzDecoder::new(&mut cursor);
+        dec.read_to_end(&mut out)
+            .map_err(|e| StageError::BadArchive(format!("gzip inflate: {e}")))?;
     }
-    if i + 8 > gz.len() {
-        return Err(StageError::BadArchive("missing gzip trailer".into()));
-    }
-    let crc = u32::from_le_bytes([gz[i], gz[i + 1], gz[i + 2], gz[i + 3]]);
-    let isize = u32::from_le_bytes([gz[i + 4], gz[i + 5], gz[i + 6], gz[i + 7]]);
-    if i + 8 != gz.len() {
+    let consumed = cursor.position() as usize;
+    if consumed != gz.len() {
         return Err(StageError::BadArchive("trailing bytes after gzip".into()));
-    }
-    if isize as usize != out.len() {
-        return Err(StageError::BadArchive("ISIZE mismatch".into()));
-    }
-    if crc != crc32_ieee(&out) {
-        return Err(StageError::BadArchive("CRC32 mismatch".into()));
     }
     Ok(out)
 }
@@ -576,7 +618,12 @@ fn parse_ustar(tar: &[u8]) -> Result<Vec<TarEntry>, StageError> {
         let name = cstr(&hdr[0..100]);
         let size = parse_octal(&hdr[124..136])?;
         let typeflag = hdr[156];
-        if typeflag == b'1' || typeflag == b'2' || typeflag == b'3' || typeflag == b'4' || typeflag == b'6' {
+        if typeflag == b'1'
+            || typeflag == b'2'
+            || typeflag == b'3'
+            || typeflag == b'4'
+            || typeflag == b'6'
+        {
             return Err(StageError::BadArchive(format!(
                 "forbidden typeflag {}",
                 typeflag as char
@@ -620,7 +667,6 @@ fn parse_ustar(tar: &[u8]) -> Result<Vec<TarEntry>, StageError> {
             is_dir: false,
         });
     }
-    // paths must be sorted
     let mut sorted = out.clone();
     sorted.sort_by(|a, b| a.path.cmp(&b.path));
     if sorted.iter().map(|e| &e.path).collect::<Vec<_>>()
@@ -652,7 +698,6 @@ fn parse_manifest(entries: &[TarEntry]) -> Result<HostManifestV1, StageError> {
         .ok_or_else(|| StageError::Manifest("missing host-manifest.json".into()))?;
     let man: HostManifestV1 =
         serde_json::from_slice(&m.data).map_err(|e| StageError::Manifest(e.to_string()))?;
-    // Ensure archiveSha256 is not embedded
     let v: serde_json::Value =
         serde_json::from_slice(&m.data).map_err(|e| StageError::Manifest(e.to_string()))?;
     if v.get("archiveSha256").is_some() {
@@ -695,10 +740,12 @@ fn verify_entries_match_manifest(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
     use tempfile::tempdir;
 
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
     fn test_layout(root: &Path) -> HostLayout {
-        // Simulate ORCA_HOME layout
         let state = root.join("state");
         let cache = root.join("cache");
         let paths = xai_grok_config::OrcaPaths {
@@ -713,112 +760,221 @@ mod tests {
         HostLayout::from_paths(&paths, root)
     }
 
+    fn with_fixture_keys<R>(f: impl FnOnce() -> R) -> R {
+        let _g = ENV_LOCK.lock().unwrap();
+        install_fixture_trust_env();
+        let r = f();
+        clear_fixture_trust_env();
+        r
+    }
+
+    fn write_signed_archive(dir: &Path, name: &str, version: &str, payload: &[u8]) -> PathBuf {
+        let bytes = build_r5_archive(version, "test-any", payload).unwrap();
+        let ap = dir.join(name);
+        fs::write(&ap, &bytes).unwrap();
+        sign_and_write_fixture_sig(&ap, &bytes).unwrap();
+        ap
+    }
+
     #[test]
     fn stage_valid_archive() {
+        with_fixture_keys(|| {
+            let dir = tempdir().unwrap();
+            let layout = test_layout(dir.path());
+            layout.ensure_dirs().unwrap();
+            let ap = write_signed_archive(
+                dir.path(),
+                "a.tar.gz",
+                "0.0.0-test-a",
+                b"#!/bin/sh\necho va\n",
+            );
+            let staged = stage_archive(&layout, &ap, None, false).unwrap();
+            assert_eq!(staged.receipt.version, "0.0.0-test-a");
+            assert_eq!(staged.receipt.signature_algorithm, SIG_ALG_ED25519);
+            assert_eq!(staged.transaction.phase, TxnPhase::Staged);
+            assert!(staged.staged_bin.is_file());
+            assert!(layout.archive_sig_path(&staged.archive_sha256).is_file());
+        });
+    }
+
+    #[test]
+    fn r5_level9_gzip_accepted() {
+        with_fixture_keys(|| {
+            let dir = tempdir().unwrap();
+            let layout = test_layout(dir.path());
+            layout.ensure_dirs().unwrap();
+            let bytes = build_r5_archive("0.0.0-test-a", "test-any", b"payload-level9").unwrap();
+            // Header contract: magic, deflate, FLG=0, MTIME=0, XFL=2, OS=255
+            assert_eq!(&bytes[0..4], &[0x1f, 0x8b, 8, 0]);
+            assert_eq!(&bytes[4..8], &[0, 0, 0, 0]);
+            assert_eq!(bytes[8], 2);
+            assert_eq!(bytes[9], 255);
+            // Must be compressed deflate (not only store BTYPE=0) for non-trivial payload.
+            let btype = (bytes[10] >> 1) & 3;
+            assert!(
+                btype == 1 || btype == 2,
+                "expected fixed/dynamic Huffman BTYPE, got {btype}"
+            );
+            let ap = dir.path().join("a.tar.gz");
+            fs::write(&ap, &bytes).unwrap();
+            sign_and_write_fixture_sig(&ap, &bytes).unwrap();
+            let staged = stage_archive(&layout, &ap, None, false).unwrap();
+            assert_eq!(staged.receipt.version, "0.0.0-test-a");
+        });
+    }
+
+    #[test]
+    fn forgeable_digest_sig_rejected_ed25519_required() {
+        with_fixture_keys(|| {
+            let dir = tempdir().unwrap();
+            let layout = test_layout(dir.path());
+            layout.ensure_dirs().unwrap();
+            let bytes = build_r5_archive("0.0.0-test-a", "test-any", b"x").unwrap();
+            let ap = dir.path().join("a.tar.gz");
+            fs::write(&ap, &bytes).unwrap();
+            // Old test-only-sha512-v1 construction (forgeable from public bytes).
+            let h1 = {
+                use sha2::{Digest, Sha256};
+                let mut d = Sha256::new();
+                d.update(&bytes);
+                d.finalize()
+            };
+            let h2 = {
+                use sha2::{Digest, Sha256};
+                let mut d = Sha256::new();
+                d.update(b"test-only-sha512-v1");
+                d.update(&h1);
+                d.finalize()
+            };
+            let mut fake = [0u8; 64];
+            fake[..32].copy_from_slice(&h1);
+            fake[32..].copy_from_slice(&h2);
+            let mut sigp = ap.as_os_str().to_os_string();
+            sigp.push(".sig");
+            fs::write(PathBuf::from(sigp), fake).unwrap();
+            let err = stage_archive(&layout, &ap, None, false).unwrap_err();
+            assert!(
+                matches!(err, StageError::BadSignature(_)),
+                "forgeable digest sig must not promote: {err}"
+            );
+        });
+    }
+
+    #[test]
+    fn missing_release_key_external_required() {
+        let _g = ENV_LOCK.lock().unwrap();
+        clear_fixture_trust_env();
         let dir = tempdir().unwrap();
         let layout = test_layout(dir.path());
         layout.ensure_dirs().unwrap();
-        let bytes = build_r5_archive("0.0.0-test-a", "test-any", b"#!/bin/sh\necho va\n").unwrap();
+        let bytes = build_r5_archive("0.0.0-test-a", "test-any", b"x").unwrap();
         let ap = dir.path().join("a.tar.gz");
         fs::write(&ap, &bytes).unwrap();
-        write_sig_file(&ap, &bytes).unwrap();
-        let staged = stage_archive(&layout, &ap, None, false).unwrap();
-        assert_eq!(staged.receipt.version, "0.0.0-test-a");
-        assert_eq!(staged.transaction.phase, TxnPhase::Staged);
-        assert!(staged.staged_bin.is_file());
+        // Even a well-formed 64-byte sig cannot promote without pinned keys.
+        let mut sigp = ap.as_os_str().to_os_string();
+        sigp.push(".sig");
+        fs::write(PathBuf::from(sigp), [1u8; 64]).unwrap();
+        let err = stage_archive(&layout, &ap, None, false).unwrap_err();
+        assert!(matches!(err, StageError::ExternalRequiredSigningKey));
     }
 
     #[test]
     fn same_version_conflict() {
-        let dir = tempdir().unwrap();
-        let layout = test_layout(dir.path());
-        layout.ensure_dirs().unwrap();
-        let a = build_r5_archive("1.0.0", "test-any", b"binary-a").unwrap();
-        let b = build_r5_archive("1.0.0", "test-any", b"binary-b-different").unwrap();
-        assert_ne!(sha256_hex(&a), sha256_hex(&b));
-        let ap = dir.path().join("a.tar.gz");
-        fs::write(&ap, &a).unwrap();
-        write_sig_file(&ap, &a).unwrap();
-let s = stage_archive(&layout, &ap, None, false).unwrap();
-        s.receipt
-            .write_atomic(&layout.receipt_path(&s.receipt.receipt_digest))
-            .unwrap();
-        let cur = super::receipt::CurrentHostV1 {
-            schema_version: super::receipt::CURRENT_SCHEMA,
-            version: s.receipt.version.clone(),
-            archive_sha256: s.receipt.archive_sha256.clone(),
-            receipt_digest: s.receipt.receipt_digest.clone(),
-            binary_path: layout.managed_bin.display().to_string(),
-            updated_at: now_rfc3339(),
-        };
-        cur.write_atomic(&layout.current_path).unwrap();
-        let bp = dir.path().join("b.tar.gz");
-        fs::write(&bp, &b).unwrap();
-        write_sig_file(&bp, &b).unwrap();
-        let err = stage_archive(&layout, &bp, None, false).unwrap_err();
-        assert!(matches!(err, StageError::VersionByteConflict(_)));
+        with_fixture_keys(|| {
+            let dir = tempdir().unwrap();
+            let layout = test_layout(dir.path());
+            layout.ensure_dirs().unwrap();
+            let a = build_r5_archive("1.0.0", "test-any", b"binary-a").unwrap();
+            let b = build_r5_archive("1.0.0", "test-any", b"binary-b-different").unwrap();
+            assert_ne!(sha256_hex(&a), sha256_hex(&b));
+            let ap = dir.path().join("a.tar.gz");
+            fs::write(&ap, &a).unwrap();
+            sign_and_write_fixture_sig(&ap, &a).unwrap();
+            let s = stage_archive(&layout, &ap, None, false).unwrap();
+            s.receipt
+                .write_atomic(&layout.receipt_path(&s.receipt.receipt_digest))
+                .unwrap();
+            let cur = super::receipt::CurrentHostV1 {
+                schema_version: super::receipt::CURRENT_SCHEMA,
+                version: s.receipt.version.clone(),
+                archive_sha256: s.receipt.archive_sha256.clone(),
+                receipt_digest: s.receipt.receipt_digest.clone(),
+                binary_path: layout.managed_bin.display().to_string(),
+                updated_at: now_rfc3339(),
+            };
+            cur.write_atomic(&layout.current_path).unwrap();
+            let bp = dir.path().join("b.tar.gz");
+            fs::write(&bp, &b).unwrap();
+            sign_and_write_fixture_sig(&bp, &b).unwrap();
+            let err = stage_archive(&layout, &bp, None, false).unwrap_err();
+            assert!(matches!(err, StageError::VersionByteConflict(_)));
+        });
     }
 
     #[test]
     fn bad_signature_rejected() {
-        let dir = tempdir().unwrap();
-        let layout = test_layout(dir.path());
-        layout.ensure_dirs().unwrap();
-        let bytes = build_r5_archive("0.0.0-test-a", "test-any", b"x").unwrap();
-        let ap = dir.path().join("a.tar.gz");
-        fs::write(&ap, &bytes).unwrap();
-        let mut sigp = ap.as_os_str().to_os_string();
-        sigp.push(".sig");
-        fs::write(PathBuf::from(sigp), [0u8; 64]).unwrap();
-        let err = stage_archive(&layout, &ap, None, false).unwrap_err();
-        assert!(matches!(err, StageError::BadSignature(_)));
+        with_fixture_keys(|| {
+            let dir = tempdir().unwrap();
+            let layout = test_layout(dir.path());
+            layout.ensure_dirs().unwrap();
+            let bytes = build_r5_archive("0.0.0-test-a", "test-any", b"x").unwrap();
+            let ap = dir.path().join("a.tar.gz");
+            fs::write(&ap, &bytes).unwrap();
+            let mut sigp = ap.as_os_str().to_os_string();
+            sigp.push(".sig");
+            fs::write(PathBuf::from(sigp), [0u8; 64]).unwrap();
+            let err = stage_archive(&layout, &ap, None, false).unwrap_err();
+            assert!(matches!(err, StageError::BadSignature(_)));
+        });
     }
 
     #[test]
     fn target_mismatch() {
-        let dir = tempdir().unwrap();
-        let layout = test_layout(dir.path());
-        layout.ensure_dirs().unwrap();
-        let bytes = build_r5_archive("0.0.0-test-a", "windows-only-nope", b"x").unwrap();
-        let ap = dir.path().join("a.tar.gz");
-        fs::write(&ap, &bytes).unwrap();
-        write_sig_file(&ap, &bytes).unwrap();
-        let err = stage_archive(&layout, &ap, None, false).unwrap_err();
-        assert!(matches!(err, StageError::TargetMismatch { .. }));
+        with_fixture_keys(|| {
+            let dir = tempdir().unwrap();
+            let layout = test_layout(dir.path());
+            layout.ensure_dirs().unwrap();
+            let bytes = build_r5_archive("0.0.0-test-a", "windows-x86_64", b"x").unwrap();
+            let ap = dir.path().join("a.tar.gz");
+            fs::write(&ap, &bytes).unwrap();
+            sign_and_write_fixture_sig(&ap, &bytes).unwrap();
+            let err = stage_archive(&layout, &ap, None, false).unwrap_err();
+            assert!(matches!(err, StageError::TargetMismatch { .. }));
+        });
     }
 
     #[test]
     fn running_path_mismatch() {
-        let dir = tempdir().unwrap();
-        let layout = test_layout(dir.path());
-        layout.ensure_dirs().unwrap();
-        // Create managed bin different from current_exe
-        fs::write(&layout.managed_bin, b"managed").unwrap();
-        let bytes = build_r5_archive("0.0.0-test-a", "test-any", b"x").unwrap();
-        let ap = dir.path().join("a.tar.gz");
-        fs::write(&ap, &bytes).unwrap();
-        write_sig_file(&ap, &bytes).unwrap();
-        let err = stage_archive(&layout, &ap, None, true).unwrap_err();
-        assert!(matches!(err, StageError::RunningPathMismatch { .. }));
+        with_fixture_keys(|| {
+            let dir = tempdir().unwrap();
+            let layout = test_layout(dir.path());
+            layout.ensure_dirs().unwrap();
+            fs::write(&layout.managed_bin, b"managed").unwrap();
+            let bytes = build_r5_archive("0.0.0-test-a", "test-any", b"x").unwrap();
+            let ap = dir.path().join("a.tar.gz");
+            fs::write(&ap, &bytes).unwrap();
+            sign_and_write_fixture_sig(&ap, &bytes).unwrap();
+            let err = stage_archive(&layout, &ap, None, true).unwrap_err();
+            assert!(matches!(err, StageError::RunningPathMismatch { .. }));
+        });
     }
 
     #[test]
     fn crash_staged_abandons_old_host() {
-        let dir = tempdir().unwrap();
-        let layout = test_layout(dir.path());
-        layout.ensure_dirs().unwrap();
-        // Install "old" host
-        fs::write(&layout.managed_bin, b"old-host").unwrap();
-        let bytes = build_r5_archive("0.0.0-test-b", "test-any", b"new-host").unwrap();
-        let ap = dir.path().join("b.tar.gz");
-        fs::write(&ap, &bytes).unwrap();
-        write_sig_file(&ap, &bytes).unwrap();
-        let staged = stage_archive(&layout, &ap, None, false).unwrap();
-        assert_eq!(staged.transaction.phase, TxnPhase::Staged);
-        // Simulate crash: do not apply. Old host remains.
-        assert_eq!(fs::read(&layout.managed_bin).unwrap(), b"old-host");
-        // Recovery: Staged txn is abandoned (not Applying/Committed).
-        let txn = HostUpdateTransactionV1::load(&staged.txn_path).unwrap();
-        assert_eq!(txn.phase, TxnPhase::Staged);
+        with_fixture_keys(|| {
+            let dir = tempdir().unwrap();
+            let layout = test_layout(dir.path());
+            layout.ensure_dirs().unwrap();
+            fs::write(&layout.managed_bin, b"old-host").unwrap();
+            let bytes = build_r5_archive("0.0.0-test-b", "test-any", b"new-host").unwrap();
+            let ap = dir.path().join("b.tar.gz");
+            fs::write(&ap, &bytes).unwrap();
+            sign_and_write_fixture_sig(&ap, &bytes).unwrap();
+            let staged = stage_archive(&layout, &ap, None, false).unwrap();
+            assert_eq!(staged.transaction.phase, TxnPhase::Staged);
+            assert_eq!(fs::read(&layout.managed_bin).unwrap(), b"old-host");
+            let txn = HostUpdateTransactionV1::load(&staged.txn_path).unwrap();
+            assert_eq!(txn.phase, TxnPhase::Staged);
+        });
     }
 }
