@@ -10,8 +10,6 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::thread;
-use std::time::Duration;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -28,18 +26,32 @@ pub enum ApplyError {
     Spawn(String),
     #[error("apply failed: {0}")]
     Failed(String),
+    #[error("failpoint:{0}")]
+    Failpoint(&'static str),
+}
+
+/// Deterministic crash-boundary injection. No wall-clock sleep.
+/// Set `ORCA_HOST_UPDATE_FAILPOINT` to one of:
+/// `before_applying`, `after_promote_before_receipt`, `before_commit`.
+fn hit_failpoint(name: &'static str) -> Result<(), ApplyError> {
+    match std::env::var("ORCA_HOST_UPDATE_FAILPOINT") {
+        Ok(v) if v == name => Err(ApplyError::Failpoint(name)),
+        _ => Ok(()),
+    }
 }
 
 /// Promote staged update: either in-process (tests / ORCA_HOST_UPDATE_IN_PROCESS=1)
 /// or via hidden `__apply-host-update --transaction <path>` child.
-pub fn promote(layout: &HostLayout, staged: &StagedUpdate) -> Result<HostUpdateReceiptV1, ApplyError> {
+pub fn promote(
+    layout: &HostLayout,
+    staged: &StagedUpdate,
+) -> Result<HostUpdateReceiptV1, ApplyError> {
     if staged.transaction.phase != TxnPhase::Staged {
         return Err(ApplyError::BadPhase(staged.transaction.phase));
     }
     if std::env::var_os("ORCA_HOST_UPDATE_IN_PROCESS").is_some_and(|v| v == "1") {
         return apply_transaction_in_process(layout, &staged.txn_path, &staged.receipt);
     }
-    // Prefer launching staged binary so the new host applies itself.
     let child_bin = if staged.staged_bin.is_file() {
         staged.staged_bin.clone()
     } else {
@@ -64,11 +76,8 @@ pub fn promote(layout: &HostLayout, staged: &StagedUpdate) -> Result<HostUpdateR
 }
 
 /// Hidden entry: `__apply-host-update --transaction <path>`
+/// No fixed sleep — Unix rename-over-busy keeps the old inode; failpoints are deterministic.
 pub fn run_apply_host_update(txn_path: &Path) -> Result<(), ApplyError> {
-    // Wait briefly for parent to release the running binary (best-effort).
-    if std::env::var_os("ORCA_HOST_UPDATE_IN_PROCESS").is_none() {
-        thread::sleep(Duration::from_millis(50));
-    }
     let layout = HostLayout::resolve_current().map_err(ApplyError::Receipt)?;
     let receipt = match std::env::var_os("ORCA_HOST_UPDATE_RECEIPT") {
         Some(p) => HostUpdateReceiptV1::load(Path::new(&p))?,
@@ -98,6 +107,8 @@ pub fn apply_transaction_in_process(
         other => return Err(ApplyError::BadPhase(other)),
     }
 
+    hit_failpoint("before_applying")?;
+
     // Crash at Staged abandons: only transition to Applying when we begin replace.
     txn.set_phase(TxnPhase::Applying);
     txn.write_atomic(txn_path)?;
@@ -112,7 +123,6 @@ pub fn apply_transaction_in_process(
         return Err(ApplyError::MissingStaged(staged_bin.display().to_string()));
     }
 
-    // Retain prior binary as backup beside install_root.
     let dest = layout.managed_bin.clone();
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent)?;
@@ -120,11 +130,9 @@ pub fn apply_transaction_in_process(
     if dest.exists() {
         let bak = dest.with_extension("bak");
         let _ = fs::remove_file(&bak);
-        // Best-effort copy prior for rollback material.
         let _ = fs::copy(&dest, &bak);
     }
 
-    // Atomic promote: write to temp then rename over destination.
     let tmp = dest.with_extension("new");
     fs::copy(&staged_bin, &tmp)?;
     #[cfg(unix)]
@@ -132,10 +140,8 @@ pub fn apply_transaction_in_process(
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&tmp, fs::Permissions::from_mode(0o755))?;
     }
-    // On Unix, rename over existing works even if dest is busy (old inode remains).
     fs::rename(&tmp, &dest)?;
 
-    // Copy any other receipt-listed files (none for minimal host besides binary).
     for f in &receipt.files {
         if f.relative_path == bin_name || f.relative_path == "orca" {
             continue;
@@ -150,11 +156,11 @@ pub fn apply_transaction_in_process(
         }
     }
 
-    // Persist receipt.
+    hit_failpoint("after_promote_before_receipt")?;
+
     let rpath = layout.receipt_path(&receipt.receipt_digest);
     receipt.write_atomic(&rpath)?;
 
-    // Update LKG from prior current (if any).
     if layout.current_path.is_file() {
         if let Ok(cur) = receipt::CurrentHostV1::load(&layout.current_path) {
             let lkg = LastKnownGoodV1 {
@@ -167,6 +173,8 @@ pub fn apply_transaction_in_process(
             lkg.write_atomic(&layout.lkg_path)?;
         }
     }
+
+    hit_failpoint("before_commit")?;
 
     let current = CurrentHostV1 {
         schema_version: CURRENT_SCHEMA,
@@ -182,7 +190,6 @@ pub fn apply_transaction_in_process(
     txn.candidate_receipt_digest = Some(receipt.receipt_digest.clone());
     txn.write_atomic(txn_path)?;
 
-    // Cleanup staging (best-effort).
     let _ = fs::remove_dir_all(&staged_root);
 
     Ok(receipt.clone())
@@ -210,4 +217,70 @@ pub fn recover_abandoned(layout: &HostLayout) -> Result<usize, ApplyError> {
         }
     }
     Ok(n)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::host_update::stage::{
+        build_r5_archive, clear_fixture_trust_env, install_fixture_trust_env,
+        sign_and_write_fixture_sig, stage_archive,
+    };
+    use std::sync::Mutex;
+    use tempfile::tempdir;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn layout_at(root: &Path) -> HostLayout {
+        let paths = xai_grok_config::OrcaPaths {
+            config_file: root.join("config.toml"),
+            data_root: root.join("data"),
+            state_root: root.join("state"),
+            cache_root: root.join("cache"),
+            runtime_root: root.join("runtime"),
+            logs_dir: root.join("state/logs"),
+            from_orca_home: true,
+        };
+        HostLayout::from_paths(&paths, root)
+    }
+
+    #[test]
+    fn failpoint_before_applying_keeps_old_host() {
+        let _g = ENV_LOCK.lock().unwrap();
+        install_fixture_trust_env();
+        unsafe { std::env::set_var("ORCA_HOST_UPDATE_IN_PROCESS", "1") };
+        unsafe { std::env::set_var("ORCA_HOST_UPDATE_FAILPOINT", "before_applying") };
+        let dir = tempdir().unwrap();
+        let layout = layout_at(dir.path());
+        layout.ensure_dirs().unwrap();
+        fs::write(&layout.managed_bin, b"old-host").unwrap();
+        let bytes = build_r5_archive("0.0.0-test-b", "test-any", b"new-host").unwrap();
+        let ap = dir.path().join("b.tar.gz");
+        fs::write(&ap, &bytes).unwrap();
+        sign_and_write_fixture_sig(&ap, &bytes).unwrap();
+        let staged = stage_archive(&layout, &ap, None, false).unwrap();
+        staged
+            .receipt
+            .write_atomic(&layout.receipt_path(&staged.receipt.receipt_digest))
+            .unwrap();
+        let err = promote(&layout, &staged).unwrap_err();
+        assert!(matches!(err, ApplyError::Failpoint("before_applying")));
+        assert_eq!(fs::read(&layout.managed_bin).unwrap(), b"old-host");
+        let txn = HostUpdateTransactionV1::load(&staged.txn_path).unwrap();
+        assert_eq!(txn.phase, TxnPhase::Staged);
+        unsafe { std::env::remove_var("ORCA_HOST_UPDATE_FAILPOINT") };
+        unsafe { std::env::remove_var("ORCA_HOST_UPDATE_IN_PROCESS") };
+        clear_fixture_trust_env();
+    }
+
+    #[test]
+    fn no_fixed_sleep_in_apply_source() {
+        let src = include_str!("apply.rs");
+        let prod = src.split("#[cfg(test)]").next().unwrap_or(src);
+        assert!(!prod.contains("thread::sleep"), "apply must not sleep");
+        assert!(
+            !prod.contains("std::time::Duration"),
+            "apply must not use wall-clock delay"
+        );
+    }
 }
