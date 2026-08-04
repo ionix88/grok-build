@@ -4091,26 +4091,57 @@ fn run_todo16_happy(
         &String::from_utf8_lossy(&check.stderr),
     ));
     let out = String::from_utf8_lossy(&check.stdout);
-    if check.status.success() && out.contains("hostUpdateCheck") {
-        asserts.push(assert_row("update_check_readonly", "PASS", "check JSON emitted"));
+    let state_host = orca_home.join("state/host");
+    let staging = orca_home.join("cache/host-staging");
+    let readonly_ok = check.status.success()
+        && out.contains("hostUpdateCheck")
+        && !state_host.exists()
+        && !staging.exists();
+    if readonly_ok {
+        asserts.push(assert_row(
+            "update_check_readonly",
+            "PASS",
+            "check JSON emitted; no host state/staging dirs created",
+        ));
     } else {
-        asserts.push(assert_row("update_check_readonly", "FAIL", &out));
+        asserts.push(assert_row(
+            "update_check_readonly",
+            "FAIL",
+            &format!(
+                "out={out}; state_host={}; staging={}",
+                state_host.exists(),
+                staging.exists()
+            ),
+        ));
         let _ = fs::remove_dir_all(&tmp);
         return finish(FinishInput {
             cli, root, record_raw, cmds, asserts, status: "REJECTED", assertion_ids: &[],
         });
     }
-    // Source-level proof of isolation + transaction APIs (binary fixture packaging is unit-tested).
     let mod_src = fs::read_to_string(root.join("crates/codegen/xai-grok-pager-bin/src/host_update/mod.rs"))
         .map_err(|e| e.to_string())?;
     let stage_src = fs::read_to_string(root.join("crates/codegen/xai-grok-pager-bin/src/host_update/stage.rs"))
         .map_err(|e| e.to_string())?;
-    if mod_src.contains("try_run_from_args") && stage_src.contains("build_r5_archive") {
-        asserts.push(assert_row("va_to_vb_promote", "PASS", "update/stage APIs present; unit tests cover vA/vB"));
+    let receipt_src = fs::read_to_string(root.join("crates/codegen/xai-grok-pager-bin/src/host_update/receipt.rs"))
+        .map_err(|e| e.to_string())?;
+    if mod_src.contains("try_run_from_args")
+        && stage_src.contains("build_r5_archive")
+        && receipt_src.contains("ed25519-detached-v1")
+        && stage_src.contains("gzip_level9")
+    {
+        asserts.push(assert_row(
+            "va_to_vb_promote",
+            "PASS",
+            "update/stage + Ed25519 + R5 level-9 present",
+        ));
     } else {
-        asserts.push(assert_row("va_to_vb_promote", "FAIL", "missing APIs"));
+        asserts.push(assert_row("va_to_vb_promote", "FAIL", "missing APIs/trust/gzip"));
     }
-    if mod_src.contains("rollback") {
+    if mod_src.contains("rollback")
+        && root
+            .join("crates/codegen/xai-grok-pager-bin/src/host_update/rollback.rs")
+            .is_file()
+    {
         asserts.push(assert_row("rollback_lkg", "PASS", "rollback surface present"));
     } else {
         asserts.push(assert_row("rollback_lkg", "FAIL", "rollback missing"));
@@ -4145,15 +4176,55 @@ fn run_todo16_failure(
     let mut asserts = Vec::new();
     let stage_src = fs::read_to_string(root.join("crates/codegen/xai-grok-pager-bin/src/host_update/stage.rs"))
         .map_err(|e| e.to_string())?;
-    let mod_src = fs::read_to_string(root.join("crates/codegen/xai-grok-pager-bin/src/host_update/mod.rs"))
+    let apply_src = fs::read_to_string(root.join("crates/codegen/xai-grok-pager-bin/src/host_update/apply.rs"))
         .map_err(|e| e.to_string())?;
+    let rollback_src =
+        fs::read_to_string(root.join("crates/codegen/xai-grok-pager-bin/src/host_update/rollback.rs"))
+            .map_err(|e| e.to_string())?;
+    let receipt_src =
+        fs::read_to_string(root.join("crates/codegen/xai-grok-pager-bin/src/host_update/receipt.rs"))
+            .map_err(|e| e.to_string())?;
     let guards = [
-        ("bad_signature", stage_src.contains("BadSignature") && stage_src.contains("bad_signature_rejected")),
-        ("target_mismatch", stage_src.contains("TargetMismatch") && stage_src.contains("target_mismatch")),
-        ("running_path_mismatch", stage_src.contains("RunningPathMismatch") && stage_src.contains("running_path_mismatch")),
-        ("same_version_byte_conflict", stage_src.contains("VersionByteConflict") && stage_src.contains("same_version_conflict")),
-        ("crash_staged", stage_src.contains("crash_staged_abandons_old_host") || mod_src.contains("recover_abandoned")),
-        ("rollback_incompatible", mod_src.contains("rollback") && root.join("crates/codegen/xai-grok-pager-bin/src/host_update/rollback.rs").is_file()),
+        (
+            "bad_signature",
+            stage_src.contains("BadSignature")
+                && stage_src.contains("bad_signature_rejected")
+                && stage_src.contains("forgeable_digest_sig_rejected_ed25519_required")
+                && stage_src.contains("ExternalRequiredSigningKey")
+                && receipt_src.contains("ed25519-detached-v1")
+                && !stage_src.contains("fn sign_test_archive")
+                && receipt_src.contains("verify_ed25519_detached"),
+        ),
+        (
+            "target_mismatch",
+            stage_src.contains("TargetMismatch") && stage_src.contains("target_mismatch"),
+        ),
+        (
+            "running_path_mismatch",
+            stage_src.contains("RunningPathMismatch") && stage_src.contains("running_path_mismatch"),
+        ),
+        (
+            "same_version_byte_conflict",
+            stage_src.contains("VersionByteConflict") && stage_src.contains("same_version_conflict"),
+        ),
+        (
+            "crash_staged",
+            (stage_src.contains("crash_staged_abandons_old_host")
+                || apply_src.contains("recover_abandoned"))
+                && apply_src.contains("ORCA_HOST_UPDATE_FAILPOINT")
+                && !apply_src
+                    .split("#[cfg(test)]")
+                    .next()
+                    .unwrap_or("")
+                    .contains("thread::sleep"),
+        ),
+        (
+            "rollback_incompatible",
+            rollback_src.contains("IncompatibleTarget")
+                && rollback_src.contains("rollback_incompatible_target_refused")
+                && !rollback_src.contains("write_sig_file")
+                && !rollback_src.contains("sign_test_archive"),
+        ),
     ];
     let mut all_ok = true;
     for (id, ok) in guards {
