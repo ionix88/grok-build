@@ -3901,7 +3901,7 @@ fn run_todo12_happy(
 ) -> Result<u8, String> {
     use xai_grok_agent::plugins::agent_backend::HostPlatform;
     use xai_grok_pager::backend::{
-        load_user_default, parse_selector, prepare_launch, resolve, run_backend_cli,
+        load_user_default, parse_selector, prepare_launch_with_paths, resolve, run_backend_cli,
         set_user_default, BackendCliPaths, BackendRegistry, DiscoverOpts, ExternalActivateRequest,
         ExternalCreateRequest, LaunchBackendRequest, LaunchMode, NATIVE_BACKEND_ID, PinStore,
         SelectionError, SelectionInput, SelectionOrigin,
@@ -4331,14 +4331,23 @@ fn run_todo12_happy(
         "interactive+headless call prepare_launch",
     ));
 
-    let prev_home = env::var_os("ORCA_HOME");
-    unsafe { env::set_var("ORCA_HOME", tmp.join("launch-home")) };
-    fs::create_dir_all(tmp.join("launch-home")).map_err(|e| e.to_string())?;
-    let launch_ok = prepare_launch(&LaunchBackendRequest {
-        explicit_backend: None,
-        resume_host_session_id: None,
-        mode: LaunchMode::Headless,
-    })
+    let launch_home = tmp.join("launch-home");
+    fs::create_dir_all(launch_home.join("state")).map_err(|e| e.to_string())?;
+    let launch_paths = BackendCliPaths {
+        registry_path: launch_home.join("state/plugins/registry-v2.json"),
+        default_path: launch_home.join("state/backend-default.json"),
+        plugins_root: Some(launch_home.join("plugins")),
+    };
+    let launch_pins = launch_home.join("state/session-pins");
+    let launch_ok = prepare_launch_with_paths(
+        &LaunchBackendRequest {
+            explicit_backend: None,
+            resume_host_session_id: None,
+            mode: LaunchMode::Headless,
+        },
+        &launch_paths,
+        &launch_pins,
+    )
     .map_err(|e| e.to_string())?;
     if !launch_ok.resolved.native_start {
         asserts.push(assert_row(
@@ -4356,11 +4365,15 @@ fn run_todo12_happy(
             assertion_ids: &[],
         });
     }
-    let launch_err = prepare_launch(&LaunchBackendRequest {
-        explicit_backend: Some("missing-backend-xyz"),
-        resume_host_session_id: None,
-        mode: LaunchMode::Interactive,
-    });
+    let launch_err = prepare_launch_with_paths(
+        &LaunchBackendRequest {
+            explicit_backend: Some("missing-backend-xyz"),
+            resume_host_session_id: None,
+            mode: LaunchMode::Interactive,
+        },
+        &launch_paths,
+        &launch_pins,
+    );
     if launch_err.is_ok() {
         asserts.push(assert_row(
             "prepare_launch_explicit",
@@ -4382,10 +4395,6 @@ fn run_todo12_happy(
         "PASS",
         "native ok; explicit missing fails closed",
     ));
-    match prev_home {
-        Some(v) => unsafe { env::set_var("ORCA_HOME", v) },
-        None => unsafe { env::remove_var("ORCA_HOME") },
-    }
 
     let bin = std::env::var_os("ORCA_BIN")
         .map(PathBuf::from)

@@ -13,8 +13,9 @@ pub use registry::{
 };
 pub use selection::{
     format_list_status_json, load_user_default, parse_selector, persist_native_session_pin,
-    persist_native_session_pin_best_effort, prepare_launch, resolve, run_backend_cli,
-    set_user_default, try_run_from_args as try_run_backend_cli, BackendCliPaths, BackendSelector,
+    persist_native_session_pin_best_effort, persist_native_session_pin_in, prepare_launch,
+    prepare_launch_with_paths, resolve, run_backend_cli, set_user_default,
+    try_run_from_args as try_run_backend_cli, BackendCliPaths, BackendSelector,
     LaunchBackendDecision, LaunchBackendRequest, LaunchMode, ResolvedBackend, SelectionError,
     SelectionInput, SelectionOrigin,
 };

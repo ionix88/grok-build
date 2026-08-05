@@ -3,7 +3,7 @@
 use super::*;
 use crate::backend::registry::{BackendRegistry, DiscoverOpts};
 use crate::backend::session_pin::{ExternalActivateRequest, ExternalCreateRequest, PinStore};
-use crate::plugin_host::lifecycle::ExternalPinState;
+use crate::plugin_host::lifecycle::{ExternalPinState, SessionPinV1};
 use crate::plugin_host::receipts::{
     ActivationPointerV1, FileRole, InstallReceiptV1, InventoryFile, LogicalDefaultV1,
     RegistryDocumentV2, TrustState,
@@ -408,44 +408,54 @@ fn list_status_json_contains_default_and_native_line() {
 #[test]
 fn prepare_launch_explicit_missing_fails_without_native_start() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let prev = std::env::var_os("ORCA_HOME");
-    unsafe { std::env::set_var("ORCA_HOME", tmp.path()) };
-    let err = prepare_launch(&LaunchBackendRequest {
-        explicit_backend: Some("missing-backend-xyz"),
-        resume_host_session_id: None,
-        mode: LaunchMode::Interactive,
-    })
+    let paths = BackendCliPaths {
+        registry_path: tmp.path().join("missing-registry.json"),
+        default_path: tmp.path().join("state/backend-default.json"),
+        plugins_root: Some(tmp.path().join("plugins")),
+    };
+    let pins = tmp.path().join("state/session-pins");
+    let err = prepare_launch_with_paths(
+        &LaunchBackendRequest {
+            explicit_backend: Some("missing-backend-xyz"),
+            resume_host_session_id: None,
+            mode: LaunchMode::Interactive,
+        },
+        &paths,
+        &pins,
+    )
     .unwrap_err();
     assert!(
         matches!(err, SelectionError::ExplicitFailed(_)),
         "{err:?}"
     );
-    let ok = prepare_launch(&LaunchBackendRequest {
-        explicit_backend: None,
-        resume_host_session_id: None,
-        mode: LaunchMode::Headless,
-    })
+    let ok = prepare_launch_with_paths(
+        &LaunchBackendRequest {
+            explicit_backend: None,
+            resume_host_session_id: None,
+            mode: LaunchMode::Headless,
+        },
+        &paths,
+        &pins,
+    )
     .unwrap();
     assert!(ok.resolved.native_start);
     assert_eq!(ok.resolved.backend_id, NATIVE_BACKEND_ID);
-    match prev {
-        Some(v) => unsafe { std::env::set_var("ORCA_HOME", v) },
-        None => unsafe { std::env::remove_var("ORCA_HOME") },
-    }
 }
 
 #[test]
 fn persist_native_session_pin_roundtrip() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let prev = std::env::var_os("ORCA_HOME");
-    unsafe { std::env::set_var("ORCA_HOME", tmp.path()) };
-    persist_native_session_pin("host-sess-1", "native-id-1").unwrap();
-    persist_native_session_pin("host-sess-1", "native-id-1").unwrap();
-    let err = persist_native_session_pin("host-sess-1", "other-id").unwrap_err();
+    let pins_dir = tmp.path().join("state").join("session-pins");
+    std::fs::create_dir_all(pins_dir.parent().unwrap()).unwrap();
+    let store = PinStore::open(&pins_dir).unwrap();
+    persist_native_session_pin_in(&store, "host-sess-1", "native-id-1").unwrap();
+    persist_native_session_pin_in(&store, "host-sess-1", "native-id-1").unwrap();
+    let err = persist_native_session_pin_in(&store, "host-sess-1", "other-id").unwrap_err();
     assert!(matches!(err, SelectionError::Pin(_)), "{err:?}");
-    match prev {
-        Some(v) => unsafe { std::env::set_var("ORCA_HOME", v) },
-        None => unsafe { std::env::remove_var("ORCA_HOME") },
+    let loaded = store.load_required("host-sess-1").unwrap();
+    match loaded {
+        SessionPinV1::Native(n) => assert_eq!(n.native_session_identity, "native-id-1"),
+        SessionPinV1::External(_) => panic!("expected native pin"),
     }
 }
 

@@ -542,14 +542,28 @@ pub fn prepare_launch(
 ) -> Result<LaunchBackendDecision, SelectionError> {
     let host_paths = crate::plugin_host::paths::HostPaths::resolve()
         .map_err(|e| SelectionError::Io(e.to_string()))?;
+    let paths = BackendCliPaths {
+        registry_path: host_paths.plugins_registry_path(),
+        default_path: host_paths.backend_default_path(),
+        plugins_root: Some(host_paths.plugins_dir()),
+    };
+    let pins_dir = host_paths.session_pins_dir();
+    prepare_launch_with_paths(req, &paths, &pins_dir)
+}
+
+/// Path-injected launch gate for tests and callers with an explicit host root.
+pub fn prepare_launch_with_paths(
+    req: &LaunchBackendRequest<'_>,
+    paths: &BackendCliPaths,
+    pins_dir: &Path,
+) -> Result<LaunchBackendDecision, SelectionError> {
     let host = xai_grok_agent::plugins::agent_backend::HostPlatform::current();
     let opts = super::registry::DiscoverOpts {
-        plugins_root: Some(host_paths.plugins_dir()),
+        plugins_root: paths.plugins_root.clone(),
         ..super::registry::DiscoverOpts::default()
     };
-    let registry_path = host_paths.plugins_registry_path();
-    let registry = if registry_path.is_file() {
-        match BackendRegistry::load_from_path(&registry_path, &host, &opts) {
+    let registry = if paths.registry_path.is_file() {
+        match BackendRegistry::load_from_path(&paths.registry_path, &host, &opts) {
             Ok(r) => r,
             Err(e) => {
                 if req.explicit_backend.is_some() {
@@ -564,22 +578,24 @@ pub fn prepare_launch(
     } else {
         BackendRegistry::native_only()
     };
-    let doc_owned = if registry_path.is_file() {
-        std::fs::read_to_string(&registry_path)
+    let doc_owned = if paths.registry_path.is_file() {
+        fs::read_to_string(&paths.registry_path)
             .ok()
             .and_then(|raw| RegistryDocumentV2::parse_json(&raw).ok())
     } else {
         None
     };
-    let pin_store = PinStore::open(host_paths.session_pins_dir())?;
-    let default_path = host_paths.backend_default_path();
+    if let Some(parent) = pins_dir.parent() {
+        fs::create_dir_all(parent).map_err(|e| SelectionError::Io(e.to_string()))?;
+    }
+    let pin_store = PinStore::open(pins_dir)?;
     let input = SelectionInput {
         explicit: req.explicit_backend,
         resume_host_session_id: req.resume_host_session_id,
         mode: req.mode,
         registry: &registry,
         registry_doc: doc_owned.as_ref(),
-        default_path: &default_path,
+        default_path: &paths.default_path,
         pin_store: Some(&pin_store),
     };
     let resolved = resolve(&input)?;
@@ -592,14 +608,12 @@ pub fn prepare_launch(
     Ok(LaunchBackendDecision { resolved })
 }
 
-/// Persist NativeV1 after native session identity exists. Same identity is idempotent.
-pub fn persist_native_session_pin(
+/// Persist NativeV1 into an opened pin store. Same identity is idempotent.
+pub fn persist_native_session_pin_in(
+    store: &PinStore,
     host_session_id: &str,
     native_session_identity: &str,
 ) -> Result<(), SelectionError> {
-    let host_paths = crate::plugin_host::paths::HostPaths::resolve()
-        .map_err(|e| SelectionError::Io(e.to_string()))?;
-    let store = PinStore::open(host_paths.session_pins_dir())?;
     match store.load(host_session_id)? {
         Some(crate::plugin_host::lifecycle::SessionPinV1::Native(n))
             if n.native_session_identity == native_session_identity =>
@@ -614,6 +628,21 @@ pub fn persist_native_session_pin(
             Ok(())
         }
     }
+}
+
+/// Persist NativeV1 under the resolved host `session-pins` directory.
+pub fn persist_native_session_pin(
+    host_session_id: &str,
+    native_session_identity: &str,
+) -> Result<(), SelectionError> {
+    let host_paths = crate::plugin_host::paths::HostPaths::resolve()
+        .map_err(|e| SelectionError::Io(e.to_string()))?;
+    let pins_dir = host_paths.session_pins_dir();
+    if let Some(parent) = pins_dir.parent() {
+        fs::create_dir_all(parent).map_err(|e| SelectionError::Io(e.to_string()))?;
+    }
+    let store = PinStore::open(pins_dir)?;
+    persist_native_session_pin_in(&store, host_session_id, native_session_identity)
 }
 
 /// Best-effort pin write at session-create boundaries (selection still gates launch).
