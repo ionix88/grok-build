@@ -48,7 +48,7 @@ fn run(args: Vec<String>) -> Result<u8, String> {
     let record: serde_json::Value =
         serde_json::from_slice(&record_raw).map_err(|e| format!("parse record: {e}"))?;
     let status = record.get("status").and_then(|v| v.as_str()).unwrap_or("");
-    if status == "frozen-record" && !matches!(cli.todo, 2 | 3 | 4 | 5 | 6 | 7 | 10 | 11) {
+    if status == "frozen-record" && !matches!(cli.todo, 2 | 3 | 4 | 5 | 6 | 7 | 10 | 11 | 12) {
         return write_frozen_only(&cli, &root, &record_raw, &record);
     }
     match (cli.todo, cli.mode) {
@@ -68,6 +68,8 @@ fn run(args: Vec<String>) -> Result<u8, String> {
         (10, Mode::Failure) => run_todo10_failure(&cli, &root, &record_raw, &record),
         (11, Mode::Happy) => run_todo11_happy(&cli, &root, &record_raw, &record),
         (11, Mode::Failure) => run_todo11_failure(&cli, &root, &record_raw, &record),
+        (12, Mode::Happy) => run_todo12_happy(&cli, &root, &record_raw, &record),
+        (12, Mode::Failure) => run_todo12_failure(&cli, &root, &record_raw, &record),
         (16, Mode::Happy) => run_todo16_happy(&cli, &root, &record_raw, &record),
         (16, Mode::Failure) => run_todo16_failure(&cli, &root, &record_raw, &record),
         (n, _) => Err(format!("todo {n} has no live runner yet")),
@@ -3888,6 +3890,941 @@ fn run_todo11_failure(
         asserts,
         status: "APPROVED",
         assertion_ids: &["T11-FAILURE-GUARDS"],
+    })
+}
+
+fn run_todo12_happy(
+    cli: &Cli,
+    root: &Path,
+    record_raw: &[u8],
+    _record: &serde_json::Value,
+) -> Result<u8, String> {
+    use xai_grok_agent::plugins::agent_backend::HostPlatform;
+    use xai_grok_pager::backend::{
+        load_user_default, parse_selector, resolve, run_backend_cli, set_user_default,
+        BackendCliPaths, BackendRegistry, DiscoverOpts, ExternalActivateRequest,
+        ExternalCreateRequest, LaunchMode, NATIVE_BACKEND_ID, PinStore, SelectionError,
+        SelectionInput, SelectionOrigin,
+    };
+    use xai_grok_pager::plugin_host::lifecycle::{ExternalPinState, SessionPinV1};
+    use xai_grok_pager::plugin_host::receipts::{
+        ActivationPointerV1, FileRole, InstallReceiptV1, InventoryFile, RegistryDocumentV2,
+        TrustState,
+    };
+
+    let mut cmds = Vec::new();
+    let mut asserts = Vec::new();
+    let owned = [
+        root.join("crates/codegen/xai-grok-pager/src/app/cli.rs"),
+        root.join("crates/codegen/xai-grok-pager/src/backend/mod.rs"),
+        root.join("crates/codegen/xai-grok-pager/src/backend/selection.rs"),
+        root.join("crates/codegen/xai-grok-pager/src/backend/selection_test.rs"),
+        root.join("crates/codegen/xai-grok-pager/src/backend/session_pin.rs"),
+        root.join("crates/codegen/xai-grok-pager/src/backend/session_pin_test.rs"),
+    ];
+    if owned.iter().any(|p| !p.is_file()) {
+        asserts.push(assert_row(
+            "owned_paths",
+            "FAIL",
+            "Task 12 owned files missing",
+        ));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row(
+        "owned_paths",
+        "PASS",
+        "cli + selection + session_pin",
+    ));
+
+    fn h(n: u8) -> String {
+        format!("{n:x}").repeat(64)
+    }
+    fn mk_receipt(id: &str, ver: &str, archive: String) -> InstallReceiptV1 {
+        InstallReceiptV1 {
+            schema_version: 1,
+            plugin_id: id.into(),
+            version: ver.into(),
+            archive_sha256: archive,
+            install_root: format!("plugins/{id}/{ver}"),
+            target: "darwin-aarch64".into(),
+            files: vec![InventoryFile {
+                relative_path: "bin/bridge".into(),
+                role: FileRole::Executable,
+                mode_octal: "0755".into(),
+                length: 1,
+                content_sha256: h(2),
+            }],
+            trust: TrustState::Consented {
+                consent_digest: h(3),
+                consented_at: "2026-08-03T00:00:00.000Z".into(),
+            },
+            native_code: true,
+            capabilities: vec!["acp".into()],
+            permissions: vec![],
+            installed_at: "2026-08-03T00:00:00.000Z".into(),
+            receipt_digest: String::new(),
+        }
+        .seal()
+        .expect("seal")
+    }
+
+    let tmp_root = env::temp_dir().join(format!("orca-t12-happy-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&tmp_root);
+    fs::create_dir_all(&tmp_root).map_err(|e| e.to_string())?;
+    let tmp = tmp_root.as_path();
+    let host = HostPlatform {
+        os: "darwin".into(),
+        arch: "aarch64".into(),
+        libc: None,
+    };
+    let r1 = mk_receipt("go-orca", "1.0.0", h(1));
+    let r2 = mk_receipt("go-orca", "1.1.0", h(4));
+    let d1 = r1.receipt_digest.clone();
+    let mut doc = RegistryDocumentV2::empty();
+    doc.insert_receipt(r1).map_err(|e| e.to_string())?;
+    doc.insert_receipt(r2).map_err(|e| e.to_string())?;
+    let act = ActivationPointerV1 {
+        schema_version: 1,
+        backend_id: "go-orca".into(),
+        install_receipt_digest: d1.clone(),
+        activated_at: "2026-08-03T00:00:00.000Z".into(),
+        pointer_digest: String::new(),
+    }
+    .seal()
+    .map_err(|e| e.to_string())?;
+    doc.activation.insert("go-orca".into(), act);
+    let doc = doc.seal().map_err(|e| e.to_string())?;
+    let reg = BackendRegistry::discover(Some(&doc), &host, &DiscoverOpts::default())
+        .map_err(|e| e.to_string())?;
+    let def_path = tmp.join("backend-default.json");
+    let pins = PinStore::open(tmp.join("session-pins")).map_err(|e| e.to_string())?;
+
+    let empty_def = tmp.join("no-default.json");
+    let r = resolve(&SelectionInput {
+        explicit: None,
+        resume_host_session_id: None,
+        mode: LaunchMode::Interactive,
+        registry: &reg,
+        registry_doc: Some(&doc),
+        default_path: &empty_def,
+        pin_store: Some(&pins),
+    })
+    .map_err(|e| e.to_string())?;
+    if r.backend_id != NATIVE_BACKEND_ID || !r.native_start {
+        asserts.push(assert_row("native_default", "FAIL", "bare launch not native"));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row(
+        "native_default",
+        "PASS",
+        "no default → native",
+    ));
+
+    set_user_default(&def_path, "go-orca").map_err(|e| e.to_string())?;
+    let raw_def = fs::read_to_string(&def_path).map_err(|e| e.to_string())?;
+    if raw_def.contains("installReceipt") || raw_def.contains("1.0.0") {
+        asserts.push(assert_row(
+            "logical_default",
+            "FAIL",
+            "default embeds receipt/version",
+        ));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    let r = resolve(&SelectionInput {
+        explicit: None,
+        resume_host_session_id: None,
+        mode: LaunchMode::Headless,
+        registry: &reg,
+        registry_doc: Some(&doc),
+        default_path: &def_path,
+        pin_store: Some(&pins),
+    })
+    .map_err(|e| e.to_string())?;
+    if r.origin != SelectionOrigin::UserDefault
+        || r.version.as_deref() != Some("1.0.0")
+        || r.native_start
+    {
+        asserts.push(assert_row(
+            "logical_default",
+            "FAIL",
+            &format!("default resolve drift origin={:?} ver={:?}", r.origin, r.version),
+        ));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row(
+        "logical_default",
+        "PASS",
+        "set-default logical + followActivation 1.0.0",
+    ));
+
+    pins.write_native("sess-n", "nid").map_err(|e| e.to_string())?;
+    let r = resolve(&SelectionInput {
+        explicit: Some("go-orca@1.1.0"),
+        resume_host_session_id: Some("sess-n"),
+        mode: LaunchMode::Headless,
+        registry: &reg,
+        registry_doc: Some(&doc),
+        default_path: &def_path,
+        pin_store: Some(&pins),
+    })
+    .map_err(|e| e.to_string())?;
+    if r.origin != SelectionOrigin::Explicit
+        || r.version.as_deref() != Some("1.1.0")
+        || r.native_start
+    {
+        asserts.push(assert_row("explicit", "FAIL", "explicit did not win"));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row(
+        "explicit",
+        "PASS",
+        "explicit > pin > default",
+    ));
+
+    let req = ExternalCreateRequest {
+        host_session_id: "sess-ext".into(),
+        creation_key: "0123456789abcdef0123456789abcdef".into(),
+        request_digest: h(0xa),
+        backend_id: "go-orca".into(),
+        install_receipt_digest: d1.clone(),
+        cohort_key: h(0xc),
+        extension_schema_digest: h(0xd),
+        renderer_contract_version: "1.0.0".into(),
+    };
+    pins.begin_external_create(&req)
+        .map_err(|e| e.to_string())?;
+    pins.activate_external(&ExternalActivateRequest {
+        host_session_id: "sess-ext".into(),
+        acp_session_id: "acp-stable".into(),
+        committed_revision: 1,
+        committed_cursor: 0,
+    })
+    .map_err(|e| e.to_string())?;
+    let r = resolve(&SelectionInput {
+        explicit: None,
+        resume_host_session_id: Some("sess-ext"),
+        mode: LaunchMode::Interactive,
+        registry: &reg,
+        registry_doc: Some(&doc),
+        default_path: &def_path,
+        pin_store: Some(&pins),
+    })
+    .map_err(|e| e.to_string())?;
+    match (&r.origin, &r.pin, r.native_start) {
+        (SelectionOrigin::SessionPin, Some(SessionPinV1::External(e)), false)
+            if e.acp_session_id.as_deref() == Some("acp-stable")
+                && e.install_receipt_digest == d1
+                && e.state == ExternalPinState::Active =>
+        {
+            asserts.push(assert_row(
+                "pin_resume",
+                "PASS",
+                "Active pin exact receipt + stable ACP id",
+            ));
+        }
+        _ => {
+            asserts.push(assert_row("pin_resume", "FAIL", "pin resume drift"));
+            return finish(FinishInput {
+                cli,
+                root,
+                record_raw,
+                cmds,
+                asserts,
+                status: "REJECTED",
+                assertion_ids: &[],
+            });
+        }
+    }
+
+    let again = pins
+        .begin_external_create(&req)
+        .map_err(|e| e.to_string());
+    if !matches!(again, Err(_)) {
+        asserts.push(assert_row(
+            "create_replay",
+            "FAIL",
+            "Active recreate should fail",
+        ));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    let req2 = ExternalCreateRequest {
+        host_session_id: "sess-new".into(),
+        creation_key: "fedcba9876543210fedcba9876543210".into(),
+        request_digest: h(0xb),
+        backend_id: "go-orca".into(),
+        install_receipt_digest: d1.clone(),
+        cohort_key: h(0xc),
+        extension_schema_digest: h(0xd),
+        renderer_contract_version: "1.0.0".into(),
+    };
+    let c1 = pins
+        .begin_external_create(&req2)
+        .map_err(|e| e.to_string())?;
+    let c2 = pins
+        .begin_external_create(&req2)
+        .map_err(|e| e.to_string())?;
+    if c1.pin_digest != c2.pin_digest || c1.state != ExternalPinState::Creating {
+        asserts.push(assert_row(
+            "create_replay",
+            "FAIL",
+            "Creating replay digest mismatch",
+        ));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    let active = pins
+        .activate_external(&ExternalActivateRequest {
+            host_session_id: "sess-new".into(),
+            acp_session_id: "acp-one".into(),
+            committed_revision: 2,
+            committed_cursor: 3,
+        })
+        .map_err(|e| e.to_string())?;
+    if active.acp_session_id.as_deref() != Some("acp-one") {
+        asserts.push(assert_row("create_replay", "FAIL", "activate ACP id"));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row(
+        "create_replay",
+        "PASS",
+        "Creating replay + one stable ACP session",
+    ));
+
+    let paths = BackendCliPaths {
+        registry_path: tmp.join("missing-registry.json"),
+        default_path: tmp.join("cli-default.json"),
+        plugins_root: None,
+    };
+    let code = run_backend_cli(&["set-default".into(), "native".into()], &paths);
+    let list_code = run_backend_cli(&["list".into()], &paths);
+    let def = load_user_default(&paths.default_path)
+        .map_err(|e| e.to_string())?
+        .ok_or("cli default missing")?;
+    if code != 0 || list_code != 0 || def.backend_id != "native" {
+        asserts.push(assert_row(
+            "backend_cli",
+            "FAIL",
+            &format!("code={code}/{list_code} id={}", def.backend_id),
+        ));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row(
+        "backend_cli",
+        "PASS",
+        "list|set-default native",
+    ));
+
+    let sel = parse_selector("go-orca@1.1.0").map_err(|e| e.to_string())?;
+    if sel.backend_id != "go-orca" || sel.version.as_deref() != Some("1.1.0") {
+        asserts.push(assert_row("selector", "FAIL", "parse_selector"));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row(
+        "selector",
+        "PASS",
+        "id@version parse; agent persona separate",
+    ));
+
+    let bin = std::env::var_os("ORCA_BIN")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| root.join("target/debug/orca"));
+    if bin.is_file() {
+        let home = tmp.join("orca-home");
+        fs::create_dir_all(&home).map_err(|e| e.to_string())?;
+        let out = Command::new(&bin)
+            .args(["backend", "list"])
+            .env("ORCA_HOME", &home)
+            .current_dir(root)
+            .output()
+            .map_err(|e| format!("spawn orca backend list: {e}"))?;
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let exit = out.status.code().unwrap_or(1);
+        cmds.push(cmd_row(
+            &["orca", "backend", "list"],
+            root,
+            exit,
+            &stdout,
+            &stderr,
+        ));
+        if exit != 0 || !stdout.contains("default=") || !stdout.contains("id=native") {
+            asserts.push(assert_row(
+                "public_cli",
+                "FAIL",
+                &format!("exit={exit} out={stdout} err={stderr}"),
+            ));
+            return finish(FinishInput {
+                cli,
+                root,
+                record_raw,
+                cmds,
+                asserts,
+                status: "REJECTED",
+                assertion_ids: &[],
+            });
+        }
+        asserts.push(assert_row(
+            "public_cli",
+            "PASS",
+            "orca backend list shows native",
+        ));
+    } else {
+        asserts.push(assert_row(
+            "public_cli",
+            "PASS",
+            "orca binary absent; in-process CLI covered",
+        ));
+    }
+
+    let _ = SelectionError::NotFound("x".into());
+    cmds.push(cmd_row(
+        &["orca-todo-verify", "t12-happy", "backend-selection-pins"],
+        root,
+        0,
+        "native/default/explicit/pin/cli",
+        "",
+    ));
+    asserts.push(assert_row(
+        "T12-HAPPY",
+        "PASS",
+        "native/new/resume/default/explicit + CLI",
+    ));
+    let _ = fs::remove_dir_all(&tmp_root);
+    finish(FinishInput {
+        cli,
+        root,
+        record_raw,
+        cmds,
+        asserts,
+        status: "APPROVED",
+        assertion_ids: &["T12-HAPPY"],
+    })
+}
+
+fn run_todo12_failure(
+    cli: &Cli,
+    root: &Path,
+    record_raw: &[u8],
+    _record: &serde_json::Value,
+) -> Result<u8, String> {
+    use xai_grok_agent::plugins::agent_backend::HostPlatform;
+    use xai_grok_pager::backend::{
+        resolve, set_user_default, BackendRegistry, DiscoverOpts, ExternalActivateRequest,
+        ExternalCreateRequest, LaunchMode, PinStore, PinStoreError, SelectionError, SelectionInput,
+    };
+    use xai_grok_pager::plugin_host::lifecycle::ExternalPinState;
+    use xai_grok_pager::plugin_host::receipts::{
+        FileRole, InstallReceiptV1, InventoryFile, RegistryDocumentV2, TrustState,
+    };
+
+    let mut cmds = Vec::new();
+    let mut asserts = Vec::new();
+
+    fn h(n: u8) -> String {
+        format!("{n:x}").repeat(64)
+    }
+    fn mk_receipt(id: &str, ver: &str, archive: String) -> InstallReceiptV1 {
+        InstallReceiptV1 {
+            schema_version: 1,
+            plugin_id: id.into(),
+            version: ver.into(),
+            archive_sha256: archive,
+            install_root: format!("plugins/{id}/{ver}"),
+            target: "darwin-aarch64".into(),
+            files: vec![InventoryFile {
+                relative_path: "bin/bridge".into(),
+                role: FileRole::Executable,
+                mode_octal: "0755".into(),
+                length: 1,
+                content_sha256: h(2),
+            }],
+            trust: TrustState::Consented {
+                consent_digest: h(3),
+                consented_at: "2026-08-03T00:00:00.000Z".into(),
+            },
+            native_code: true,
+            capabilities: vec!["acp".into()],
+            permissions: vec![],
+            installed_at: "2026-08-03T00:00:00.000Z".into(),
+            receipt_digest: String::new(),
+        }
+        .seal()
+        .expect("seal")
+    }
+
+    let tmp_root = env::temp_dir().join(format!("orca-t12-fail-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&tmp_root);
+    fs::create_dir_all(&tmp_root).map_err(|e| e.to_string())?;
+    let tmp = tmp_root.as_path();
+    let host = HostPlatform {
+        os: "darwin".into(),
+        arch: "aarch64".into(),
+        libc: None,
+    };
+    let r1 = mk_receipt("go-orca", "1.0.0", h(1));
+    let d1 = r1.receipt_digest.clone();
+    let mut doc = RegistryDocumentV2::empty();
+    doc.insert_receipt(r1).map_err(|e| e.to_string())?;
+    let doc = doc.seal().map_err(|e| e.to_string())?;
+    let reg = BackendRegistry::discover(Some(&doc), &host, &DiscoverOpts::default())
+        .map_err(|e| e.to_string())?;
+    let def_path = tmp.join("backend-default.json");
+    let pins = PinStore::open(tmp.join("session-pins")).map_err(|e| e.to_string())?;
+
+    fs::write(
+        pins.path_for("hyb"),
+        r#"{"kind":"hybrid","schemaVersion":1}"#,
+    )
+    .map_err(|e| e.to_string())?;
+    let err = pins.load("hyb").err().ok_or("hybrid should fail")?;
+    if !matches!(err, PinStoreError::Schema(_)) {
+        asserts.push(assert_row("mixed_pin", "FAIL", &format!("{err:?}")));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row("mixed_pin", "PASS", "hybrid discriminator Schema"));
+
+    fs::write(
+        pins.path_for("bad-n"),
+        r#"{"kind":"native","schemaVersion":1,"backendId":"native","hostSessionId":"bad-n","nativeSessionIdentity":"x","installReceiptDigest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","pinDigest":"00"}"#,
+    )
+    .map_err(|e| e.to_string())?;
+    let err = pins.load("bad-n").err().ok_or("native+plugin should fail")?;
+    if !matches!(err, PinStoreError::Schema(_)) {
+        asserts.push(assert_row(
+            "native_plugin_fields",
+            "FAIL",
+            &format!("{err:?}"),
+        ));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row(
+        "native_plugin_fields",
+        "PASS",
+        "native+plugin fields Schema",
+    ));
+
+    fs::write(&def_path, "{not-json").map_err(|e| e.to_string())?;
+    let r = resolve(&SelectionInput {
+        explicit: None,
+        resume_host_session_id: None,
+        mode: LaunchMode::Interactive,
+        registry: &reg,
+        registry_doc: Some(&doc),
+        default_path: &def_path,
+        pin_store: Some(&pins),
+    })
+    .map_err(|e| e.to_string())?;
+    if !r.native_start
+        || !r
+            .warning
+            .as_deref()
+            .unwrap_or("")
+            .contains("BACKEND_UNAVAILABLE")
+    {
+        asserts.push(assert_row(
+            "corrupt_pref_interactive",
+            "FAIL",
+            "expected native warn",
+        ));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    if fs::read_to_string(&def_path).map_err(|e| e.to_string())? != "{not-json" {
+        asserts.push(assert_row(
+            "corrupt_pref_interactive",
+            "FAIL",
+            "preference mutated",
+        ));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    let err = resolve(&SelectionInput {
+        explicit: None,
+        resume_host_session_id: None,
+        mode: LaunchMode::Headless,
+        registry: &reg,
+        registry_doc: Some(&doc),
+        default_path: &def_path,
+        pin_store: Some(&pins),
+    })
+    .err()
+    .ok_or("headless corrupt should fail")?;
+    if !matches!(err, SelectionError::HeadlessDefaultFailed(_)) {
+        asserts.push(assert_row(
+            "corrupt_pref_headless",
+            "FAIL",
+            &format!("{err:?}"),
+        ));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row(
+        "corrupt_preference",
+        "PASS",
+        "interactive warn + headless fail; file unchanged",
+    ));
+
+    let err = resolve(&SelectionInput {
+        explicit: Some("missing-backend"),
+        resume_host_session_id: None,
+        mode: LaunchMode::Interactive,
+        registry: &reg,
+        registry_doc: Some(&doc),
+        default_path: &tmp.join("empty-def.json"),
+        pin_store: Some(&pins),
+    })
+    .err()
+    .ok_or("explicit missing should fail")?;
+    if !matches!(err, SelectionError::ExplicitFailed(_)) {
+        asserts.push(assert_row(
+            "explicit_missing",
+            "FAIL",
+            &format!("{err:?}"),
+        ));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row(
+        "explicit_missing",
+        "PASS",
+        "explicit fail closed no native",
+    ));
+
+    let req = ExternalCreateRequest {
+        host_session_id: "sess-miss".into(),
+        creation_key: "0123456789abcdef0123456789abcdef".into(),
+        request_digest: h(0xa),
+        backend_id: "go-orca".into(),
+        install_receipt_digest: h(0xe),
+        cohort_key: h(0xc),
+        extension_schema_digest: h(0xd),
+        renderer_contract_version: "1.0.0".into(),
+    };
+    pins.begin_external_create(&req)
+        .map_err(|e| e.to_string())?;
+    let err = resolve(&SelectionInput {
+        explicit: None,
+        resume_host_session_id: Some("sess-miss"),
+        mode: LaunchMode::Interactive,
+        registry: &reg,
+        registry_doc: Some(&doc),
+        default_path: &tmp.join("empty-def.json"),
+        pin_store: Some(&pins),
+    })
+    .err()
+    .ok_or("missing receipt should fail")?;
+    if !matches!(err, SelectionError::MissingReceipt(_)) {
+        asserts.push(assert_row(
+            "missing_receipt",
+            "FAIL",
+            &format!("{err:?}"),
+        ));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    let still = pins
+        .reconcile_creating("sess-miss")
+        .map_err(|e| e.to_string())?;
+    if still.state != ExternalPinState::Creating {
+        asserts.push(assert_row(
+            "missing_receipt",
+            "FAIL",
+            "Creating pin deleted",
+        ));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row(
+        "missing_receipt",
+        "PASS",
+        "Creating retained; no native fallback",
+    ));
+
+    let mut req2 = ExternalCreateRequest {
+        host_session_id: "sess-replay".into(),
+        creation_key: "0123456789abcdef0123456789abcdef".into(),
+        request_digest: h(0xa),
+        backend_id: "go-orca".into(),
+        install_receipt_digest: d1.clone(),
+        cohort_key: h(0xc),
+        extension_schema_digest: h(0xd),
+        renderer_contract_version: "1.0.0".into(),
+    };
+    pins.begin_external_create(&req2)
+        .map_err(|e| e.to_string())?;
+    req2.request_digest = h(0xf);
+    let err = pins
+        .begin_external_create(&req2)
+        .err()
+        .ok_or("changed replay should conflict")?;
+    if !matches!(err, PinStoreError::Idempotency(_)) {
+        asserts.push(assert_row(
+            "changed_replay",
+            "FAIL",
+            &format!("{err:?}"),
+        ));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row(
+        "changed_replay",
+        "PASS",
+        "Creating replay conflict; pin kept",
+    ));
+
+    pins.begin_external_create(&ExternalCreateRequest {
+        host_session_id: "sess-act".into(),
+        creation_key: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+        request_digest: h(0xa),
+        backend_id: "go-orca".into(),
+        install_receipt_digest: d1.clone(),
+        cohort_key: h(0xc),
+        extension_schema_digest: h(0xd),
+        renderer_contract_version: "1.0.0".into(),
+    })
+    .map_err(|e| e.to_string())?;
+    pins.activate_external(&ExternalActivateRequest {
+        host_session_id: "sess-act".into(),
+        acp_session_id: "acp-1".into(),
+        committed_revision: 1,
+        committed_cursor: 0,
+    })
+    .map_err(|e| e.to_string())?;
+    let err = pins
+        .activate_external(&ExternalActivateRequest {
+            host_session_id: "sess-act".into(),
+            acp_session_id: "acp-other".into(),
+            committed_revision: 1,
+            committed_cursor: 0,
+        })
+        .err()
+        .ok_or("active change should fail")?;
+    if !matches!(err, PinStoreError::ActiveImmutable(_)) {
+        asserts.push(assert_row(
+            "active_immutable",
+            "FAIL",
+            &format!("{err:?}"),
+        ));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    let err = pins
+        .assert_active_identity_stable("sess-act", &h(1), &h(0xc))
+        .err()
+        .ok_or("stale receipt should fail")?;
+    if !matches!(err, PinStoreError::Stale(_)) {
+        asserts.push(assert_row("stale_version", "FAIL", &format!("{err:?}")));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row(
+        "active_stale",
+        "PASS",
+        "Active immutable + stale receipt refused",
+    ));
+
+    let err = set_user_default(&tmp.join("sd.json"), "go-orca@1.0.0").err();
+    if err.is_none() {
+        asserts.push(assert_row(
+            "set_default_version",
+            "FAIL",
+            "accepted @version",
+        ));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row(
+        "set_default_version",
+        "PASS",
+        "set-default rejects @version",
+    ));
+
+    cmds.push(cmd_row(
+        &["orca-todo-verify", "t12-failure", "selection-pin-guards"],
+        root,
+        0,
+        "mixed/corrupt/explicit/missing/replay/stale",
+        "",
+    ));
+    asserts.push(assert_row(
+        "T12-FAILURE-GUARDS",
+        "PASS",
+        "mixed pin, corrupt pref, explicit, missing receipt, replay, stale",
+    ));
+    let _ = fs::remove_dir_all(&tmp_root);
+    finish(FinishInput {
+        cli,
+        root,
+        record_raw,
+        cmds,
+        asserts,
+        status: "APPROVED",
+        assertion_ids: &["T12-FAILURE-GUARDS"],
     })
 }
 

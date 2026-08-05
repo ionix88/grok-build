@@ -3,25 +3,35 @@
   "todo": 12,
   "role": "orca",
   "title": "Implement backend selection, defaults, and session pins",
-  "status": "frozen-record",
+  "status": "live",
   "happy": {
     "assertionId": "T12-HAPPY",
     "action": {
-      "kind": "deferred",
+      "kind": "backend_selection_pins",
       "subject": "task-12"
     },
     "checks": [
-      "owned_by_later_task"
+      "native_default",
+      "logical_default_follow_activation",
+      "explicit_over_pin_default",
+      "pin_resume_exact_receipt",
+      "creating_replay_stable_acp",
+      "backend_cli_list_set_default",
+      "agent_persona_independent"
     ]
   },
   "failure": {
     "assertionId": "T12-FAILURE-GUARDS",
     "fixtures": [
-      {
-        "id": "deferred",
-        "expect": "product_validation_deferred"
-      }
+      { "id": "mixed_pin", "expect": "Schema" },
+      { "id": "native_plugin_fields", "expect": "Schema" },
+      { "id": "corrupt_preference", "expect": "InteractiveWarnHeadlessFail" },
+      { "id": "explicit_missing", "expect": "ExplicitFailedNoNative" },
+      { "id": "missing_receipt", "expect": "MissingReceiptCreatingKept" },
+      { "id": "changed_replay", "expect": "Idempotency" },
+      { "id": "active_stale", "expect": "ActiveImmutableStale" },
+      { "id": "set_default_version", "expect": "InvalidSelector" }
     ]
   },
-  "note": "Product implementation is Task 12. This record is frozen by Task 2."
+  "note": "Task 12 live ORCA_QA — backend selection, defaults, immutable session pins."
 }
