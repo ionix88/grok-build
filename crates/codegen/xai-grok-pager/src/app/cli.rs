@@ -8,14 +8,15 @@ use std::path::PathBuf;
 /// Public CLI product name (clap binary name, help Usage header, argv0).
 pub const PUBLIC_CLI_NAME: &str = "orca";
 
-/// Reserved built-in backend ID (plan D02). Selection/wiring is a later task;
-/// this constant freezes the identifier so public surfaces cannot drift.
+/// Reserved built-in backend ID (plan D02).
 pub const NATIVE_BACKEND_ID: &str = "native";
 /// Top-level commands for the pager binary.
 #[derive(Debug, Clone, Subcommand)]
 pub enum Command {
     /// Run Grok without the interactive UI
     Agent(Box<AgentArgs>),
+    /// List, inspect, or set the default agent backend
+    Backend(BackendArgs),
     /// Show the configuration Grok discovers for this directory
     Inspect {
         /// Emit machine-readable JSON output.
@@ -148,6 +149,36 @@ See ~/.grok/README.md for more information.
     /// var is set.
     Dashboard,
 }
+
+/// Arguments for `orca backend`.
+#[derive(Debug, clap::Args, Clone)]
+pub struct BackendArgs {
+    #[command(subcommand)]
+    pub command: BackendCommand,
+}
+
+/// `orca backend` subcommands.
+#[derive(Debug, Subcommand, Clone)]
+pub enum BackendCommand {
+    /// List installed backends (native + verified receipts)
+    List {
+        /// Emit machine-readable JSON lines (status rows).
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show backend status (same surface as list; no health probe)
+    Status {
+        /// Emit machine-readable JSON lines (status rows).
+        #[arg(long)]
+        json: bool,
+    },
+    /// Persist logical default backend for future sessions (`followActivation`)
+    SetDefault {
+        /// Backend id only (e.g. `native` or `go-orca`). Never a receipt or `@version`.
+        backend: String,
+    },
+}
+
 /// Arguments for the `wrap` subcommand: the command to run, then its args.
 #[derive(Debug, clap::Args, Clone)]
 pub struct WrapArgs {
@@ -621,9 +652,15 @@ pub struct PagerArgs {
     /// Disable cross-session memory for this session.
     #[arg(long = "no-memory", conflicts_with = "experimental_memory")]
     pub no_memory: bool,
-    /// Agent name or definition file path.
+    /// Agent name or definition file path (persona only; not a runtime backend).
     #[arg(long = "agent", value_name = "NAME")]
     pub agent: Option<String>,
+    /// Backend id or `id@version` for this session (non-persistent override).
+    ///
+    /// Precedence: explicit `--backend`, immutable session pin, user default, then `native`.
+    /// Does not change `--agent` persona selection.
+    #[arg(long = "backend", value_name = "ID[@VERSION]")]
+    pub backend: Option<String>,
     /// Inline subagent definitions as JSON.
     #[arg(long = "agents", value_name = "JSON")]
     pub agents_json: Option<String>,
@@ -1036,7 +1073,50 @@ mod tests {
         assert_eq!(NATIVE_BACKEND_ID, "native");
         let args = PagerArgs::try_parse_from(["orca", "--agent", "native"]).expect("parses");
         assert_eq!(args.agent.as_deref(), Some("native"));
+        assert!(args.backend.is_none());
         assert_ne!(args.agent.as_deref(), Some(PUBLIC_CLI_NAME));
+    }
+
+    #[test]
+    fn backend_flag_is_independent_of_agent_persona() {
+        let args = PagerArgs::try_parse_from([
+            "orca",
+            "--agent",
+            "reviewer",
+            "--backend",
+            "go-orca@1.0.0",
+        ])
+        .expect("--agent and --backend parse together");
+        assert_eq!(args.agent.as_deref(), Some("reviewer"));
+        assert_eq!(args.backend.as_deref(), Some("go-orca@1.0.0"));
+        assert!(args.command.is_none());
+    }
+
+    #[test]
+    fn backend_subcommand_list_status_set_default_parse() {
+        let list = PagerArgs::try_parse_from(["orca", "backend", "list"]).expect("list");
+        assert!(matches!(
+            list.command,
+            Some(Command::Backend(BackendArgs {
+                command: BackendCommand::List { json: false }
+            }))
+        ));
+        let status =
+            PagerArgs::try_parse_from(["orca", "backend", "status", "--json"]).expect("status");
+        assert!(matches!(
+            status.command,
+            Some(Command::Backend(BackendArgs {
+                command: BackendCommand::Status { json: true }
+            }))
+        ));
+        let set = PagerArgs::try_parse_from(["orca", "backend", "set-default", "go-orca"])
+            .expect("set-default");
+        match set.command {
+            Some(Command::Backend(BackendArgs {
+                command: BackendCommand::SetDefault { backend },
+            })) => assert_eq!(backend, "go-orca"),
+            other => panic!("unexpected {other:?}"),
+        }
     }
 
     #[test]

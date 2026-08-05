@@ -1665,6 +1665,9 @@ fn main() {
         if let Some(code) = host_update::try_run_from_args(&argv) {
             std::process::exit(code);
         }
+        if let Some(code) = xai_grok_pager::backend::try_run_backend_cli(&argv) {
+            std::process::exit(code);
+        }
         if let Some(code) = import_grok::try_run_from_args(argv) {
             std::process::exit(code);
         }
@@ -1873,6 +1876,30 @@ async fn async_main(args: PagerArgs) -> Result<()> {
                 init_tracing_simple("cli");
                 let _otel_guard = xai_grok_telemetry::otel_layer::otel_guard();
                 return xai_grok_pager::plugin_cmd::run(plugin_args).await;
+            }
+            Command::Backend(backend_args) => {
+                // Prefer pre-clap intercept; this arm covers clap-parsed paths.
+                let mut argv = vec!["backend".to_string()];
+                match backend_args.command {
+                    xai_grok_pager::app::BackendCommand::List { json } => {
+                        argv.push("list".into());
+                        if json {
+                            argv.push("--json".into());
+                        }
+                    }
+                    xai_grok_pager::app::BackendCommand::Status { json } => {
+                        argv.push("status".into());
+                        if json {
+                            argv.push("--json".into());
+                        }
+                    }
+                    xai_grok_pager::app::BackendCommand::SetDefault { backend } => {
+                        argv.push("set-default".into());
+                        argv.push(backend);
+                    }
+                }
+                let code = xai_grok_pager::backend::try_run_backend_cli(argv).unwrap_or(2);
+                std::process::exit(code);
             }
             Command::Models => {
                 init_tracing_simple("cli");
