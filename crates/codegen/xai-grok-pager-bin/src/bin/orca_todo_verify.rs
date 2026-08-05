@@ -3901,10 +3901,10 @@ fn run_todo12_happy(
 ) -> Result<u8, String> {
     use xai_grok_agent::plugins::agent_backend::HostPlatform;
     use xai_grok_pager::backend::{
-        load_user_default, parse_selector, resolve, run_backend_cli, set_user_default,
-        BackendCliPaths, BackendRegistry, DiscoverOpts, ExternalActivateRequest,
-        ExternalCreateRequest, LaunchMode, NATIVE_BACKEND_ID, PinStore, SelectionError,
-        SelectionInput, SelectionOrigin,
+        load_user_default, parse_selector, prepare_launch, resolve, run_backend_cli,
+        set_user_default, BackendCliPaths, BackendRegistry, DiscoverOpts, ExternalActivateRequest,
+        ExternalCreateRequest, LaunchBackendRequest, LaunchMode, NATIVE_BACKEND_ID, PinStore,
+        SelectionError, SelectionInput, SelectionOrigin,
     };
     use xai_grok_pager::plugin_host::lifecycle::{ExternalPinState, SessionPinV1};
     use xai_grok_pager::plugin_host::receipts::{
@@ -4304,6 +4304,89 @@ fn run_todo12_happy(
         "id@version parse; agent persona separate",
     ));
 
+    let app_src = fs::read_to_string(root.join("crates/codegen/xai-grok-pager/src/app/mod.rs"))
+        .map_err(|e| e.to_string())?;
+    let headless_src =
+        fs::read_to_string(root.join("crates/codegen/xai-grok-pager/src/headless.rs"))
+            .map_err(|e| e.to_string())?;
+    if !app_src.contains("prepare_launch") || !headless_src.contains("prepare_launch") {
+        asserts.push(assert_row(
+            "production_wiring",
+            "FAIL",
+            "app::run / headless missing prepare_launch",
+        ));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row(
+        "production_wiring",
+        "PASS",
+        "interactive+headless call prepare_launch",
+    ));
+
+    let prev_home = env::var_os("ORCA_HOME");
+    unsafe { env::set_var("ORCA_HOME", tmp.join("launch-home")) };
+    fs::create_dir_all(tmp.join("launch-home")).map_err(|e| e.to_string())?;
+    let launch_ok = prepare_launch(&LaunchBackendRequest {
+        explicit_backend: None,
+        resume_host_session_id: None,
+        mode: LaunchMode::Headless,
+    })
+    .map_err(|e| e.to_string())?;
+    if !launch_ok.resolved.native_start {
+        asserts.push(assert_row(
+            "prepare_launch_native",
+            "FAIL",
+            "expected native_start",
+        ));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    let launch_err = prepare_launch(&LaunchBackendRequest {
+        explicit_backend: Some("missing-backend-xyz"),
+        resume_host_session_id: None,
+        mode: LaunchMode::Interactive,
+    });
+    if launch_err.is_ok() {
+        asserts.push(assert_row(
+            "prepare_launch_explicit",
+            "FAIL",
+            "missing backend should fail",
+        ));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row(
+        "prepare_launch",
+        "PASS",
+        "native ok; explicit missing fails closed",
+    ));
+    match prev_home {
+        Some(v) => unsafe { env::set_var("ORCA_HOME", v) },
+        None => unsafe { env::remove_var("ORCA_HOME") },
+    }
+
     let bin = std::env::var_os("ORCA_BIN")
         .map(PathBuf::from)
         .unwrap_or_else(|| root.join("target/debug/orca"));
@@ -4342,10 +4425,74 @@ fn run_todo12_happy(
                 assertion_ids: &[],
             });
         }
+        let out_json = Command::new(&bin)
+            .args(["backend", "list", "--json"])
+            .env("ORCA_HOME", &home)
+            .current_dir(root)
+            .output()
+            .map_err(|e| format!("spawn orca backend list --json: {e}"))?;
+        let jstdout = String::from_utf8_lossy(&out_json.stdout);
+        let jexit = out_json.status.code().unwrap_or(1);
+        cmds.push(cmd_row(
+            &["orca", "backend", "list", "--json"],
+            root,
+            jexit,
+            &jstdout,
+            "",
+        ));
+        if jexit != 0 || !jstdout.contains("\"default\"") || !jstdout.contains("native") {
+            asserts.push(assert_row(
+                "public_cli_json",
+                "FAIL",
+                &format!("exit={jexit} out={jstdout}"),
+            ));
+            return finish(FinishInput {
+                cli,
+                root,
+                record_raw,
+                cmds,
+                asserts,
+                status: "REJECTED",
+                assertion_ids: &[],
+            });
+        }
+        let out_bad = Command::new(&bin)
+            .args(["-p", "hi", "--backend", "missing-backend-xyz"])
+            .env("ORCA_HOME", &home)
+            .current_dir(root)
+            .output()
+            .map_err(|e| format!("spawn orca -p --backend: {e}"))?;
+        let bstdout = String::from_utf8_lossy(&out_bad.stdout);
+        let bstderr = String::from_utf8_lossy(&out_bad.stderr);
+        let bexit = out_bad.status.code().unwrap_or(1);
+        cmds.push(cmd_row(
+            &["orca", "-p", "hi", "--backend", "missing-backend-xyz"],
+            root,
+            bexit,
+            &bstdout,
+            &bstderr,
+        ));
+        let combined = format!("{bstdout}{bstderr}");
+        if bexit == 0 || !combined.contains("backend selection failed") {
+            asserts.push(assert_row(
+                "public_cli_backend_fail",
+                "FAIL",
+                &format!("exit={bexit} out={combined}"),
+            ));
+            return finish(FinishInput {
+                cli,
+                root,
+                record_raw,
+                cmds,
+                asserts,
+                status: "REJECTED",
+                assertion_ids: &[],
+            });
+        }
         asserts.push(assert_row(
             "public_cli",
             "PASS",
-            "orca backend list shows native",
+            "list + --json + headless --backend fail-closed",
         ));
     } else {
         asserts.push(assert_row(
@@ -4366,7 +4513,7 @@ fn run_todo12_happy(
     asserts.push(assert_row(
         "T12-HAPPY",
         "PASS",
-        "native/new/resume/default/explicit + CLI",
+        "native/new/resume/default/explicit + CLI + production wiring",
     ));
     let _ = fs::remove_dir_all(&tmp_root);
     finish(FinishInput {

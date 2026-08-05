@@ -269,6 +269,8 @@ impl PinStore {
                     && p.backend_id == req.backend_id
                     && p.install_receipt_digest == req.install_receipt_digest
                     && p.cohort_key == req.cohort_key
+                    && p.extension_schema_digest == req.extension_schema_digest
+                    && p.renderer_contract_version == req.renderer_contract_version
                 {
                     return Ok(p);
                 }

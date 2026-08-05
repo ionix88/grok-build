@@ -477,6 +477,26 @@ pub async fn run(
     let screen_mode_override = screen_mode_relaunch::take_screen_mode_env_override();
     let cancel = CancellationToken::new();
     let startup_start = std::time::Instant::now();
+    let resume_host_session_id = args
+        .resume_session
+        .as_deref()
+        .or(args.load_session.as_deref())
+        .filter(|s| !s.is_empty());
+    let launch = crate::backend::prepare_launch(&crate::backend::LaunchBackendRequest {
+        explicit_backend: args.backend.as_deref(),
+        resume_host_session_id,
+        mode: crate::backend::LaunchMode::Interactive,
+    })
+    .map_err(|e| anyhow::anyhow!("backend selection failed: {e}"))?;
+    if let Some(ref warning) = launch.resolved.warning {
+        eprintln!("{warning}");
+    }
+    if !launch.resolved.native_start {
+        anyhow::bail!(
+            "backend selection refused native start (backend={})",
+            launch.resolved.backend_id
+        );
+    }
     let raw_config = xai_grok_shell::config::load_effective_config()
         .map_err(|e| anyhow::anyhow!("Failed to load config: {e}"))?;
     let grok_com_config = match xai_grok_shell::agent::config::Config::new_from_toml_cfg(

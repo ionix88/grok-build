@@ -101,6 +101,21 @@ fn external_replay_changed_request_is_idempotency_conflict() {
 }
 
 #[test]
+fn external_replay_changed_extension_schema_or_renderer_conflicts() {
+    let (_t, s) = store();
+    let mut req = ext_req("host-e2b");
+    s.begin_external_create(&req).unwrap();
+    req.extension_schema_digest = h(0x1);
+    let err = s.begin_external_create(&req).unwrap_err();
+    assert!(matches!(err, PinStoreError::Idempotency(_)), "{err:?}");
+    req = ext_req("host-e2c");
+    s.begin_external_create(&req).unwrap();
+    req.renderer_contract_version = "9.9.9".into();
+    let err = s.begin_external_create(&req).unwrap_err();
+    assert!(matches!(err, PinStoreError::Idempotency(_)), "{err:?}");
+}
+
+#[test]
 fn external_activate_yields_stable_acp_session_once() {
     let (_t, s) = store();
     s.begin_external_create(&ext_req("host-e3")).unwrap();

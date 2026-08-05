@@ -2070,6 +2070,7 @@ async fn async_main(args: PagerArgs) -> Result<()> {
                 worktree: args.worktree,
                 restore_code: args.restore_code,
                 agent: args.agent.clone(),
+                backend: args.backend.clone(),
                 agents_json: args.agents_json.clone(),
                 cli_tools: args.cli_tools.clone(),
                 cli_disallowed_tools: args.cli_disallowed_tools.clone(),

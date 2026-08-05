@@ -391,6 +391,64 @@ fn backend_cli_set_default_and_list() {
     assert!(try_run_from_args(["not-backend"]).is_none());
 }
 
+#[test]
+fn list_status_json_contains_default_and_native_line() {
+    let lines = vec![
+        "id=native version=- kind=native selectable=yes".into(),
+        "id=go-orca version=1.0.0 kind=external selectable=yes".into(),
+    ];
+    let raw = format_list_status_json("native", &lines).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(v["default"], "native");
+    let status = v["statusLines"].as_array().unwrap();
+    assert_eq!(status.len(), 2);
+    assert!(status[0].as_str().unwrap().contains("id=native"));
+}
+
+#[test]
+fn prepare_launch_explicit_missing_fails_without_native_start() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let prev = std::env::var_os("ORCA_HOME");
+    unsafe { std::env::set_var("ORCA_HOME", tmp.path()) };
+    let err = prepare_launch(&LaunchBackendRequest {
+        explicit_backend: Some("missing-backend-xyz"),
+        resume_host_session_id: None,
+        mode: LaunchMode::Interactive,
+    })
+    .unwrap_err();
+    assert!(
+        matches!(err, SelectionError::ExplicitFailed(_)),
+        "{err:?}"
+    );
+    let ok = prepare_launch(&LaunchBackendRequest {
+        explicit_backend: None,
+        resume_host_session_id: None,
+        mode: LaunchMode::Headless,
+    })
+    .unwrap();
+    assert!(ok.resolved.native_start);
+    assert_eq!(ok.resolved.backend_id, NATIVE_BACKEND_ID);
+    match prev {
+        Some(v) => unsafe { std::env::set_var("ORCA_HOME", v) },
+        None => unsafe { std::env::remove_var("ORCA_HOME") },
+    }
+}
+
+#[test]
+fn persist_native_session_pin_roundtrip() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let prev = std::env::var_os("ORCA_HOME");
+    unsafe { std::env::set_var("ORCA_HOME", tmp.path()) };
+    persist_native_session_pin("host-sess-1", "native-id-1").unwrap();
+    persist_native_session_pin("host-sess-1", "native-id-1").unwrap();
+    let err = persist_native_session_pin("host-sess-1", "other-id").unwrap_err();
+    assert!(matches!(err, SelectionError::Pin(_)), "{err:?}");
+    match prev {
+        Some(v) => unsafe { std::env::set_var("ORCA_HOME", v) },
+        None => unsafe { std::env::remove_var("ORCA_HOME") },
+    }
+}
+
 // silence unused import if LogicalDefaultV1 only used via set
 #[allow(dead_code)]
 fn _touch(d: LogicalDefaultV1) {

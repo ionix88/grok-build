@@ -822,6 +822,10 @@ pub(in crate::app::dispatch) fn handle_session_created(
             )));
         }
         agent.bind_session_id(session_id);
+        crate::backend::persist_native_session_pin_best_effort(
+            session_id_clone.0.as_ref(),
+            session_id_clone.0.as_ref(),
+        );
         if let Some(m) = new_models {
             app.models = Some(m).into();
             agent.session.models = app.models.clone();

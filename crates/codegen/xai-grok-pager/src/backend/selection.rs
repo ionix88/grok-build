@@ -438,7 +438,7 @@ pub fn run_backend_cli(args: &[String], paths: &BackendCliPaths) -> i32 {
 }
 
 fn cmd_list_status(paths: &BackendCliPaths, rest: &[String]) -> i32 {
-    let _json = rest.iter().any(|a| a == "--json");
+    let json = rest.iter().any(|a| a == "--json");
     let host = xai_grok_agent::plugins::agent_backend::HostPlatform::current();
     let opts = super::registry::DiscoverOpts {
         plugins_root: paths.plugins_root.clone(),
@@ -461,11 +461,34 @@ fn cmd_list_status(paths: &BackendCliPaths, rest: &[String]) -> i32 {
         .flatten()
         .map(|d| d.backend_id)
         .unwrap_or_else(|| NATIVE_BACKEND_ID.into());
+    if json {
+        match format_list_status_json(&default, &lines) {
+            Ok(s) => println!("{s}"),
+            Err(e) => {
+                eprintln!("error: {e}");
+                return 2;
+            }
+        }
+        return 0;
+    }
     println!("default={default}");
     for line in lines {
         println!("{line}");
     }
     0
+}
+
+pub fn format_list_status_json(default: &str, lines: &[String]) -> Result<String, String> {
+    let backends: Vec<serde_json::Value> = lines
+        .iter()
+        .map(|line| serde_json::json!({ "statusLine": line }))
+        .collect();
+    let payload = serde_json::json!({
+        "default": default,
+        "backends": backends,
+        "statusLines": lines,
+    });
+    serde_json::to_string(&payload).map_err(|e| e.to_string())
 }
 
 /// Pre-clap intercept for `orca backend ...` (avoids full pager startup).
@@ -495,6 +518,116 @@ fn backend_cli_paths_from_env() -> Result<BackendCliPaths, String> {
         default_path: host.backend_default_path(),
         plugins_root: Some(host.plugins_dir()),
     })
+}
+
+
+/// Inputs for production backend selection before auth/ACP connect.
+#[derive(Debug, Clone, Copy)]
+pub struct LaunchBackendRequest<'a> {
+    pub explicit_backend: Option<&'a str>,
+    pub resume_host_session_id: Option<&'a str>,
+    pub mode: LaunchMode,
+}
+
+/// Native-allowed launch decision from [`prepare_launch`].
+#[derive(Debug, Clone)]
+pub struct LaunchBackendDecision {
+    pub resolved: ResolvedBackend,
+}
+
+/// Resolve backend before native auth/ACP connect. Selection failures and
+/// external backends never start native on this path.
+pub fn prepare_launch(
+    req: &LaunchBackendRequest<'_>,
+) -> Result<LaunchBackendDecision, SelectionError> {
+    let host_paths = crate::plugin_host::paths::HostPaths::resolve()
+        .map_err(|e| SelectionError::Io(e.to_string()))?;
+    let host = xai_grok_agent::plugins::agent_backend::HostPlatform::current();
+    let opts = super::registry::DiscoverOpts {
+        plugins_root: Some(host_paths.plugins_dir()),
+        ..super::registry::DiscoverOpts::default()
+    };
+    let registry_path = host_paths.plugins_registry_path();
+    let registry = if registry_path.is_file() {
+        match BackendRegistry::load_from_path(&registry_path, &host, &opts) {
+            Ok(r) => r,
+            Err(e) => {
+                if req.explicit_backend.is_some() {
+                    return Err(SelectionError::ExplicitFailed(e.to_string()));
+                }
+                if req.mode == LaunchMode::Headless {
+                    return Err(SelectionError::HeadlessDefaultFailed(e.to_string()));
+                }
+                BackendRegistry::native_only()
+            }
+        }
+    } else {
+        BackendRegistry::native_only()
+    };
+    let doc_owned = if registry_path.is_file() {
+        std::fs::read_to_string(&registry_path)
+            .ok()
+            .and_then(|raw| RegistryDocumentV2::parse_json(&raw).ok())
+    } else {
+        None
+    };
+    let pin_store = PinStore::open(host_paths.session_pins_dir())?;
+    let default_path = host_paths.backend_default_path();
+    let input = SelectionInput {
+        explicit: req.explicit_backend,
+        resume_host_session_id: req.resume_host_session_id,
+        mode: req.mode,
+        registry: &registry,
+        registry_doc: doc_owned.as_ref(),
+        default_path: &default_path,
+        pin_store: Some(&pin_store),
+    };
+    let resolved = resolve(&input)?;
+    if !resolved.native_start {
+        return Err(SelectionError::ExplicitFailed(format!(
+            "backend '{}' is external (receipt={:?}); refusing native start — external connection is not enabled on this launch path",
+            resolved.backend_id, resolved.receipt_digest
+        )));
+    }
+    Ok(LaunchBackendDecision { resolved })
+}
+
+/// Persist NativeV1 after native session identity exists. Same identity is idempotent.
+pub fn persist_native_session_pin(
+    host_session_id: &str,
+    native_session_identity: &str,
+) -> Result<(), SelectionError> {
+    let host_paths = crate::plugin_host::paths::HostPaths::resolve()
+        .map_err(|e| SelectionError::Io(e.to_string()))?;
+    let store = PinStore::open(host_paths.session_pins_dir())?;
+    match store.load(host_session_id)? {
+        Some(crate::plugin_host::lifecycle::SessionPinV1::Native(n))
+            if n.native_session_identity == native_session_identity =>
+        {
+            Ok(())
+        }
+        Some(_) => Err(SelectionError::Pin(format!(
+            "session {host_session_id} already pinned to a different identity"
+        ))),
+        None => {
+            store.write_native(host_session_id, native_session_identity)?;
+            Ok(())
+        }
+    }
+}
+
+/// Best-effort pin write at session-create boundaries (selection still gates launch).
+pub fn persist_native_session_pin_best_effort(
+    host_session_id: &str,
+    native_session_identity: &str,
+) {
+    if let Err(e) = persist_native_session_pin(host_session_id, native_session_identity) {
+        tracing::warn!(
+            error = %e,
+            session_id = %host_session_id,
+            "failed to persist native session pin"
+        );
+    }
 }
 
 #[cfg(test)]

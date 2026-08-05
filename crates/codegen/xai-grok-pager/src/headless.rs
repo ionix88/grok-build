@@ -175,6 +175,8 @@ pub struct HeadlessOptions {
     pub worktree: Option<String>,
     pub restore_code: bool,
     pub agent: Option<String>,
+    /// Runtime backend selector (`--backend`); independent of persona `--agent`.
+    pub backend: Option<String>,
     pub agents_json: Option<String>,
     pub cli_tools: Option<String>,
     pub cli_disallowed_tools: Option<String>,
@@ -845,7 +847,33 @@ pub async fn run_single_turn(
 
     let mut emitter = HeadlessEmitter::new(options.output_format, options.json_schema.is_some());
 
-    // Load config and spawn agent
+    let resume_host_session_id = options
+        .resume
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .or(options.session_id.as_deref());
+    let launch = match crate::backend::prepare_launch(&crate::backend::LaunchBackendRequest {
+        explicit_backend: options.backend.as_deref(),
+        resume_host_session_id,
+        mode: crate::backend::LaunchMode::Headless,
+    }) {
+        Ok(d) => d,
+        Err(e) => {
+            let msg = format!("backend selection failed: {e}");
+            emitter.on_error(&msg);
+            anyhow::bail!("{msg}");
+        }
+    };
+    if !launch.resolved.native_start {
+        let msg = format!(
+            "backend selection refused native start (backend={})",
+            launch.resolved.backend_id
+        );
+        emitter.on_error(&msg);
+        anyhow::bail!("{msg}");
+    }
+
+    // Load config and spawn agent (native only after selection gate).
     let t_spawn = Instant::now();
     let raw_config = xai_grok_shell::config::load_effective_config()
         .map_err(|e| anyhow::anyhow!("Failed to load config: {e}"))?;
@@ -1045,6 +1073,10 @@ pub async fn run_single_turn(
             anyhow::bail!("{msg}");
         }
     };
+    crate::backend::persist_native_session_pin_best_effort(
+        session_id.0.as_ref(),
+        session_id.0.as_ref(),
+    );
     tracing::debug!(
         elapsed_ms = t_session.elapsed().as_millis() as u64,
         session_id = %session_id.0,

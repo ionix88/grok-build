@@ -12,8 +12,10 @@ pub use registry::{
     Compatibility, DiscoverOpts, Enablement, HealthStatus, NATIVE_BACKEND_ID, NATIVE_SOURCE,
 };
 pub use selection::{
-    BackendCliPaths, BackendSelector, LaunchMode, ResolvedBackend, SelectionError, SelectionInput,
-    SelectionOrigin, load_user_default, parse_selector, resolve, run_backend_cli, set_user_default,
-    try_run_from_args as try_run_backend_cli,
+    format_list_status_json, load_user_default, parse_selector, persist_native_session_pin,
+    persist_native_session_pin_best_effort, prepare_launch, resolve, run_backend_cli,
+    set_user_default, try_run_from_args as try_run_backend_cli, BackendCliPaths, BackendSelector,
+    LaunchBackendDecision, LaunchBackendRequest, LaunchMode, ResolvedBackend, SelectionError,
+    SelectionInput, SelectionOrigin,
 };
 pub use session_pin::{ExternalActivateRequest, ExternalCreateRequest, PinStore, PinStoreError};
