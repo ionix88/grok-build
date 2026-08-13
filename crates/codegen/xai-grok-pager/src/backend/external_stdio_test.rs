@@ -389,6 +389,35 @@ fn stderr_flood_rejected() {
 }
 
 #[test]
+fn hang_read_exceeds_deadline_without_caller_cancel() {
+    // Given: hung fixture (no stdout) and a short transport deadline.
+    let Some(_) = absolute_python() else {
+        return;
+    };
+    let (_tmp, mut cfg) = make_fixture_layout("hang");
+    cfg.limits.deadline = Duration::from_millis(300);
+    let mut transport = ExternalStdioTransport::new(cfg.clone());
+    let mut conn = transport
+        .dispatch(&external_backend(&cfg.receipt_digest))
+        .unwrap();
+    let pid = conn.identity().pid;
+    // When: read_frame blocks waiting for NDJSON (no cancel_bridge from test).
+    let started = std::time::Instant::now();
+    let err = conn.read_frame().unwrap_err();
+    let elapsed = started.elapsed();
+    // Then: DeadlineExceeded within bound, bridge reaped by transport.
+    assert!(
+        matches!(err, ExternalStdioError::DeadlineExceeded),
+        "expected DeadlineExceeded, got {err:?}"
+    );
+    assert!(
+        elapsed >= Duration::from_millis(250) && elapsed < Duration::from_secs(3),
+        "elapsed {elapsed:?}"
+    );
+    let _ = pid;
+}
+
+#[test]
 fn cancellation_kills_bridge_only() {
     let Some(_) = absolute_python() else {
         return;

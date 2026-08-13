@@ -13,10 +13,10 @@ use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -243,8 +243,9 @@ impl ExternalBackendTransport for ExternalStdioTransport {
 pub struct ExternalStdioConnection {
     child: Child,
     stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
+    stdout_rx: Receiver<StdoutEvent>,
     stderr_rx: Receiver<StderrEvent>,
+    _stdout_thread: JoinHandle<()>,
     _stderr_thread: JoinHandle<()>,
     identity: BridgeProcessIdentity,
     limits: ExternalStdioLimits,
@@ -253,6 +254,13 @@ pub struct ExternalStdioConnection {
     /// True once wait() collected the exit — Drop will not kill again.
     reaped: bool,
     last_exit_code: Option<i32>,
+}
+
+enum StdoutEvent {
+    Line(Vec<u8>),
+    LineTooLarge { max: usize },
+    Io(String),
+    Eof,
 }
 
 impl std::fmt::Debug for ExternalStdioConnection {
@@ -280,7 +288,7 @@ impl ExternalStdioConnection {
         self.last_exit_code
     }
 
-    /// Write one NDJSON line (appends `\n` if missing). Honors cancel + deadline.
+    /// Write one NDJSON line (appends `\n` if missing). Honors cancel.
     pub fn write_frame(&mut self, frame: &str) -> Result<(), ExternalStdioError> {
         self.check_cancel()?;
         self.drain_stderr_events()?;
@@ -306,45 +314,89 @@ impl ExternalStdioConnection {
         Ok(())
     }
 
-    /// Read one NDJSON line (without trailing newline). Bounded size + cancel.
+    /// Read one NDJSON line (without trailing newline).
+    ///
+    /// Blocks at most `limits.deadline`. On expiry kills/reaps only this bridge
+    /// child and returns [`ExternalStdioError::DeadlineExceeded`].
     pub fn read_frame(&mut self) -> Result<String, ExternalStdioError> {
-        self.check_cancel()?;
-        self.drain_stderr_events()?;
-        let mut buf = Vec::new();
-        let max = self.limits.max_line_bytes;
-        match read_line_capped(&mut self.stdout, max, &mut buf) {
-            Ok(0) => {
-                if self.child_exited() {
-                    Err(ExternalStdioError::BridgeExited {
-                        code: self.try_exit_code(),
-                    })
-                } else {
-                    Err(ExternalStdioError::TruncatedFrame)
-                }
+        let deadline = Instant::now() + self.limits.deadline;
+        loop {
+            self.check_cancel()?;
+            self.drain_stderr_events()?;
+            let now = Instant::now();
+            if now >= deadline {
+                return self.fail_deadline();
             }
-            Ok(_) => {
-                if buf.ends_with(b"\n") {
-                    buf.pop();
-                    if buf.ends_with(b"\r") {
+            let wait = deadline.saturating_duration_since(now);
+            match self.stdout_rx.recv_timeout(wait) {
+                Ok(StdoutEvent::Line(mut buf)) => {
+                    if buf.ends_with(b"\n") {
                         buf.pop();
+                        if buf.ends_with(b"\r") {
+                            buf.pop();
+                        }
                     }
+                    let s = String::from_utf8(buf)
+                        .map_err(|e| ExternalStdioError::MalformedFrame(e.to_string()))?;
+                    if s.trim().is_empty() {
+                        continue;
+                    }
+                    let v: serde_json::Value = serde_json::from_str(&s)
+                        .map_err(|e| ExternalStdioError::MalformedFrame(e.to_string()))?;
+                    if !v.is_object() {
+                        return Err(ExternalStdioError::MalformedFrame(
+                            "frame root must be object".into(),
+                        ));
+                    }
+                    return Ok(s);
                 }
-                let s = String::from_utf8(buf)
-                    .map_err(|e| ExternalStdioError::MalformedFrame(e.to_string()))?;
-                if s.trim().is_empty() {
-                    return self.read_frame();
+                Ok(StdoutEvent::LineTooLarge { max }) => {
+                    let _ = self.kill_bridge_only();
+                    return Err(ExternalStdioError::LineTooLarge { max });
                 }
-                let v: serde_json::Value = serde_json::from_str(&s)
-                    .map_err(|e| ExternalStdioError::MalformedFrame(e.to_string()))?;
-                if !v.is_object() {
-                    return Err(ExternalStdioError::MalformedFrame(
-                        "frame root must be object".into(),
-                    ));
+                Ok(StdoutEvent::Io(msg)) => {
+                    if self.child_exited() {
+                        return Err(ExternalStdioError::BridgeExited {
+                            code: self.try_exit_code(),
+                        });
+                    }
+                    return Err(ExternalStdioError::Io(msg));
                 }
-                Ok(s)
+                Ok(StdoutEvent::Eof) => {
+                    if self.child_exited() {
+                        return Err(ExternalStdioError::BridgeExited {
+                            code: self.try_exit_code(),
+                        });
+                    }
+                    return Err(ExternalStdioError::TruncatedFrame);
+                }
+                Err(RecvTimeoutError::Timeout) => {
+                    return self.fail_deadline();
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    if self.child_exited() {
+                        return Err(ExternalStdioError::BridgeExited {
+                            code: self.try_exit_code(),
+                        });
+                    }
+                    return Err(ExternalStdioError::TruncatedFrame);
+                }
             }
-            Err(e) => Err(e),
         }
+    }
+
+    fn fail_deadline(&mut self) -> Result<String, ExternalStdioError> {
+        let _ = self.kill_bridge_only();
+        Err(ExternalStdioError::DeadlineExceeded)
+    }
+
+    fn kill_bridge_only(&mut self) -> Result<(), ExternalStdioError> {
+        if !self.reaped {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+            self.reaped = true;
+        }
+        Ok(())
     }
 
     /// Wait for child exit without treating it as daemon death — returns code.
@@ -362,10 +414,7 @@ impl ExternalStdioConnection {
     /// Explicit cancel: set flag and kill the bridge process only.
     pub fn cancel_bridge(&mut self) -> Result<(), ExternalStdioError> {
         self.cancel.store(true, Ordering::SeqCst);
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        self.reaped = true;
-        Ok(())
+        self.kill_bridge_only()
     }
 
     fn check_cancel(&self) -> Result<(), ExternalStdioError> {
@@ -493,19 +542,27 @@ fn spawn_bridge(
 
     let pid = child.id();
     let stderr_total = Arc::new(Mutex::new(0usize));
-    let (tx, rx) = mpsc::channel();
+    let (err_tx, err_rx) = mpsc::channel();
     let max_err = config.limits.max_stderr_bytes;
     let total_c = Arc::clone(&stderr_total);
     let stderr_thread = thread::Builder::new()
         .name("ext-stdio-stderr".into())
-        .spawn(move || pump_stderr(stderr, max_err, total_c, tx))
+        .spawn(move || pump_stderr(stderr, max_err, total_c, err_tx))
+        .map_err(|e| ExternalStdioError::Spawn(e.to_string()))?;
+
+    let (out_tx, out_rx) = mpsc::channel();
+    let max_line = config.limits.max_line_bytes;
+    let stdout_thread = thread::Builder::new()
+        .name("ext-stdio-stdout".into())
+        .spawn(move || pump_stdout(stdout, max_line, out_tx))
         .map_err(|e| ExternalStdioError::Spawn(e.to_string()))?;
 
     Ok(ExternalStdioConnection {
         child,
         stdin,
-        stdout: BufReader::new(stdout),
-        stderr_rx: rx,
+        stdout_rx: out_rx,
+        stderr_rx: err_rx,
+        _stdout_thread: stdout_thread,
         _stderr_thread: stderr_thread,
         identity: BridgeProcessIdentity {
             pid,
@@ -519,6 +576,36 @@ fn spawn_bridge(
         reaped: false,
         last_exit_code: None,
     })
+}
+
+fn pump_stdout(stdout: ChildStdout, max_line: usize, tx: Sender<StdoutEvent>) {
+    let mut reader = BufReader::new(stdout);
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        match read_line_capped(&mut reader, max_line, &mut buf) {
+            Ok(0) => {
+                let _ = tx.send(StdoutEvent::Eof);
+                break;
+            }
+            Ok(_) => {
+                if tx
+                    .send(StdoutEvent::Line(std::mem::take(&mut buf)))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+            Err(ExternalStdioError::LineTooLarge { max }) => {
+                let _ = tx.send(StdoutEvent::LineTooLarge { max });
+                break;
+            }
+            Err(e) => {
+                let _ = tx.send(StdoutEvent::Io(e.to_string()));
+                break;
+            }
+        }
+    }
 }
 
 fn pump_stderr(
