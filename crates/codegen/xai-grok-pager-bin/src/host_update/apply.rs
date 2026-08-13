@@ -195,7 +195,11 @@ pub fn apply_transaction_in_process(
     Ok(receipt.clone())
 }
 
-/// Recover abandoned Staged transactions (crash before Applying): leave old host.
+/// Recover abandoned Staged/Applying transactions after crash.
+///
+/// Transaction-scoped only: aborts the txn record and removes that txn's
+/// staging directory when it lies under `layout.staging_dir`. Never walks
+/// the whole staging tree, never touches receipts/current/plugins.
 pub fn recover_abandoned(layout: &HostLayout) -> Result<usize, ApplyError> {
     if !layout.transactions_dir.is_dir() {
         return Ok(0);
@@ -207,21 +211,42 @@ pub fn recover_abandoned(layout: &HostLayout) -> Result<usize, ApplyError> {
         let Ok(mut txn) = HostUpdateTransactionV1::load(&path) else {
             continue;
         };
-        if txn.phase == TxnPhase::Staged {
-            txn.set_phase(TxnPhase::Aborted);
-            txn.error = Some("abandoned staged after crash; old host retained".into());
-            txn.write_atomic(&path)?;
-            let staged = PathBuf::from(&txn.staged_root);
-            let _ = fs::remove_dir_all(staged);
-            n += 1;
-        }
+        let reason = match txn.phase {
+            TxnPhase::Staged => "abandoned staged after crash; old host retained",
+            TxnPhase::Applying => {
+                "abandoned applying after crash; staging removed, host converges via check/rollback"
+            }
+            _ => continue,
+        };
+        txn.set_phase(TxnPhase::Aborted);
+        txn.error = Some(reason.into());
+        txn.write_atomic(&path)?;
+        remove_owned_staging(layout, Path::new(&txn.staged_root));
+        n += 1;
     }
     Ok(n)
+}
+
+/// Remove a staging directory only when it is a descendant of `layout.staging_dir`.
+fn remove_owned_staging(layout: &HostLayout, staged_root: &Path) {
+    if staged_root.as_os_str().is_empty() {
+        return;
+    }
+    if !staged_root.exists() {
+        return;
+    }
+    let staging_base =
+        dunce::canonicalize(&layout.staging_dir).unwrap_or_else(|_| layout.staging_dir.clone());
+    let candidate = dunce::canonicalize(staged_root).unwrap_or_else(|_| staged_root.to_path_buf());
+    if candidate.starts_with(&staging_base) && candidate != staging_base {
+        let _ = fs::remove_dir_all(&candidate);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::host_update::rollback::rollback;
     use crate::host_update::stage::{
         build_r5_archive, clear_fixture_trust_env, install_fixture_trust_env,
         sign_and_write_fixture_sig, stage_archive,
@@ -230,6 +255,10 @@ mod tests {
     use tempfile::tempdir;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
 
     fn layout_at(root: &Path) -> HostLayout {
         let paths = xai_grok_config::OrcaPaths {
@@ -244,12 +273,74 @@ mod tests {
         HostLayout::from_paths(&paths, root)
     }
 
+    struct EnvClean;
+    impl Drop for EnvClean {
+        fn drop(&mut self) {
+            unsafe {
+                std::env::remove_var("ORCA_HOST_UPDATE_FAILPOINT");
+                std::env::remove_var("ORCA_HOST_UPDATE_IN_PROCESS");
+            }
+            clear_fixture_trust_env();
+        }
+    }
+
+    fn plant_canaries(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+        let items = [
+            (
+                root.join("data/plugins/payload/.canary"),
+                b"plugin-payload-v1".to_vec(),
+            ),
+            (
+                root.join("data/plugins/registry/.canary"),
+                b"plugin-registry-v1".to_vec(),
+            ),
+            (
+                root.join("state/session-pins/.canary"),
+                b"session-pins-v1".to_vec(),
+            ),
+            (root.join("state/cohorts/.canary"), b"cohort-v1".to_vec()),
+            (root.join("grok-home/.canary"), b"grok-home-v1".to_vec()),
+        ];
+        for (p, bytes) in &items {
+            if let Some(parent) = p.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(p, bytes).unwrap();
+        }
+        items.to_vec()
+    }
+
+    fn assert_canaries(canaries: &[(PathBuf, Vec<u8>)]) {
+        for (p, expect) in canaries {
+            assert_eq!(
+                fs::read(p).unwrap(),
+                *expect,
+                "canary drifted: {}",
+                p.display()
+            );
+        }
+    }
+
+    fn promote_version(layout: &HostLayout, dir: &Path, name: &str, version: &str, payload: &[u8]) {
+        let bytes = build_r5_archive(version, "test-any", payload).unwrap();
+        let ap = dir.join(name);
+        fs::write(&ap, &bytes).unwrap();
+        sign_and_write_fixture_sig(&ap, &bytes).unwrap();
+        let staged = stage_archive(layout, &ap, None, false).unwrap();
+        staged
+            .receipt
+            .write_atomic(&layout.receipt_path(&staged.receipt.receipt_digest))
+            .unwrap();
+        promote(layout, &staged).unwrap();
+    }
+
     #[test]
     fn failpoint_before_applying_keeps_old_host() {
-        let _g = ENV_LOCK.lock().unwrap();
+        let _g = env_lock();
         install_fixture_trust_env();
         unsafe { std::env::set_var("ORCA_HOST_UPDATE_IN_PROCESS", "1") };
         unsafe { std::env::set_var("ORCA_HOST_UPDATE_FAILPOINT", "before_applying") };
+        let _env = EnvClean;
         let dir = tempdir().unwrap();
         let layout = layout_at(dir.path());
         layout.ensure_dirs().unwrap();
@@ -268,9 +359,6 @@ mod tests {
         assert_eq!(fs::read(&layout.managed_bin).unwrap(), b"old-host");
         let txn = HostUpdateTransactionV1::load(&staged.txn_path).unwrap();
         assert_eq!(txn.phase, TxnPhase::Staged);
-        unsafe { std::env::remove_var("ORCA_HOST_UPDATE_FAILPOINT") };
-        unsafe { std::env::remove_var("ORCA_HOST_UPDATE_IN_PROCESS") };
-        clear_fixture_trust_env();
     }
 
     #[test]
@@ -282,5 +370,204 @@ mod tests {
             !prod.contains("std::time::Duration"),
             "apply must not use wall-clock delay"
         );
+    }
+
+    /// Given Applying-phase crash at after_promote_before_receipt,
+    /// When recover_abandoned runs,
+    /// Then that txn's staging is removed and phase becomes Aborted.
+    #[test]
+    fn applying_failpoint_staging_cleaned_by_recovery() {
+        let _g = env_lock();
+        install_fixture_trust_env();
+        unsafe { std::env::set_var("ORCA_HOST_UPDATE_IN_PROCESS", "1") };
+        let _env = EnvClean;
+        let dir = tempdir().unwrap();
+        let layout = layout_at(dir.path());
+        layout.ensure_dirs().unwrap();
+
+        promote_version(&layout, dir.path(), "c.tar.gz", "0.0.0-test-c", b"host-c");
+        assert_eq!(fs::read(&layout.managed_bin).unwrap(), b"host-c");
+
+        unsafe { std::env::set_var("ORCA_HOST_UPDATE_FAILPOINT", "after_promote_before_receipt") };
+        let a_bytes = build_r5_archive("0.0.0-test-a", "test-any", b"host-a").unwrap();
+        let ap = dir.path().join("a.tar.gz");
+        fs::write(&ap, &a_bytes).unwrap();
+        sign_and_write_fixture_sig(&ap, &a_bytes).unwrap();
+        let staged_a = stage_archive(&layout, &ap, None, false).unwrap();
+        staged_a
+            .receipt
+            .write_atomic(&layout.receipt_path(&staged_a.receipt.receipt_digest))
+            .unwrap();
+        let abandoned_id = staged_a.transaction.transaction_id.clone();
+        let staged_root = PathBuf::from(&staged_a.transaction.staged_root);
+        assert!(staged_root.is_dir());
+        let err = promote(&layout, &staged_a).unwrap_err();
+        assert!(
+            matches!(err, ApplyError::Failpoint("after_promote_before_receipt")),
+            "got {err:?}"
+        );
+        assert!(
+            staged_root.is_dir(),
+            "leak pre-condition: abandoned staging still on disk"
+        );
+        let txn = HostUpdateTransactionV1::load(&staged_a.txn_path).unwrap();
+        assert_eq!(txn.phase, TxnPhase::Applying);
+
+        let n = recover_abandoned(&layout).unwrap();
+        assert!(n >= 1, "must recover at least the Applying txn");
+        assert!(
+            !staged_root.exists(),
+            "abandoned Applying staging must be removed"
+        );
+        let txn = HostUpdateTransactionV1::load(&staged_a.txn_path).unwrap();
+        assert_eq!(txn.phase, TxnPhase::Aborted);
+        assert_eq!(txn.transaction_id, abandoned_id);
+    }
+
+    /// Exact residual: after_promote_before_receipt then public rollback must
+    /// clear only the abandoned Applying staging entry; foreign staging stays;
+    /// plugin/pin/cohort/grok canaries unchanged; host converges to retained C.
+    #[test]
+    fn after_promote_before_receipt_public_rollback_clears_abandoned_staging() {
+        let _g = env_lock();
+        install_fixture_trust_env();
+        unsafe { std::env::set_var("ORCA_HOST_UPDATE_IN_PROCESS", "1") };
+        let _env = EnvClean;
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let layout = layout_at(root);
+        layout.ensure_dirs().unwrap();
+        let canaries = plant_canaries(root);
+
+        // A -> B -> C retained history (matches independent reproduction).
+        promote_version(&layout, root, "a0.tar.gz", "0.0.0-test-a", b"host-a0");
+        promote_version(&layout, root, "b0.tar.gz", "0.0.0-test-b", b"host-b0");
+        promote_version(&layout, root, "c0.tar.gz", "0.0.0-test-c", b"host-c");
+        assert_eq!(fs::read(&layout.managed_bin).unwrap(), b"host-c");
+
+        // Foreign staging not referenced by any transaction — must survive cleanup.
+        let foreign = layout.staging_dir.join("foreign-not-a-txn");
+        fs::create_dir_all(&foreign).unwrap();
+        fs::write(foreign.join("keep"), b"foreign").unwrap();
+
+        // Interrupted promote of A at after_promote_before_receipt.
+        unsafe { std::env::set_var("ORCA_HOST_UPDATE_FAILPOINT", "after_promote_before_receipt") };
+        let a_bytes = build_r5_archive("0.0.0-test-a", "test-any", b"host-a-interrupted").unwrap();
+        let ap = root.join("a-int.tar.gz");
+        fs::write(&ap, &a_bytes).unwrap();
+        sign_and_write_fixture_sig(&ap, &a_bytes).unwrap();
+        let staged_a = stage_archive(&layout, &ap, None, false).unwrap();
+        staged_a
+            .receipt
+            .write_atomic(&layout.receipt_path(&staged_a.receipt.receipt_digest))
+            .unwrap();
+        let abandoned_root = PathBuf::from(&staged_a.transaction.staged_root);
+        let abandoned_name = abandoned_root
+            .file_name()
+            .map(|s| s.to_os_string())
+            .expect("staging entry name");
+        let err = promote(&layout, &staged_a).unwrap_err();
+        assert!(matches!(
+            err,
+            ApplyError::Failpoint("after_promote_before_receipt")
+        ));
+        assert!(
+            abandoned_root.is_dir(),
+            "pre-condition: abandoned staging present"
+        );
+        assert_eq!(
+            HostUpdateTransactionV1::load(&staged_a.txn_path)
+                .unwrap()
+                .phase,
+            TxnPhase::Applying
+        );
+        // Binary already replaced; current/receipt not committed — stale until rollback.
+        assert_eq!(
+            fs::read(&layout.managed_bin).unwrap(),
+            b"host-a-interrupted"
+        );
+
+        // Clear failpoint; public rollback path (calls recover_abandoned then promote C).
+        unsafe { std::env::remove_var("ORCA_HOST_UPDATE_FAILPOINT") };
+        let rolled = rollback(&layout, Some("0.0.0-test-c")).unwrap();
+        assert_eq!(rolled.version, "0.0.0-test-c");
+        assert_eq!(fs::read(&layout.managed_bin).unwrap(), b"host-c");
+
+        // Abandoned Applying staging entry must be gone.
+        assert!(
+            !abandoned_root.exists(),
+            "abandoned Applying staging must not survive public rollback"
+        );
+        let staging_names: Vec<_> = fs::read_dir(&layout.staging_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name())
+            .collect();
+        assert!(
+            !staging_names.iter().any(|n| n == &abandoned_name),
+            "abandoned txn staging name must be absent; found {staging_names:?}"
+        );
+        // Foreign staging must remain (transaction-scoped cleanup, not broad wipe).
+        assert!(
+            foreign.join("keep").is_file(),
+            "foreign staging must not be removed by recovery/rollback"
+        );
+        assert_eq!(
+            HostUpdateTransactionV1::load(&staged_a.txn_path)
+                .unwrap()
+                .phase,
+            TxnPhase::Aborted
+        );
+
+        assert_canaries(&canaries);
+    }
+
+    #[test]
+    fn remove_owned_staging_refuses_paths_outside_staging_root() {
+        let dir = tempdir().unwrap();
+        let layout = layout_at(dir.path());
+        layout.ensure_dirs().unwrap();
+        let outside = dir.path().join("not-staging");
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("keep"), b"x").unwrap();
+        remove_owned_staging(&layout, &outside);
+        assert!(
+            outside.join("keep").is_file(),
+            "must not delete paths outside staging_dir"
+        );
+        // Must not delete the staging root itself.
+        fs::write(layout.staging_dir.join("marker"), b"m").unwrap();
+        remove_owned_staging(&layout, &layout.staging_dir);
+        assert!(
+            layout.staging_dir.join("marker").is_file(),
+            "must not delete staging_dir root"
+        );
+    }
+
+    #[test]
+    fn recover_abandoned_is_idempotent() {
+        let _g = env_lock();
+        install_fixture_trust_env();
+        unsafe { std::env::set_var("ORCA_HOST_UPDATE_IN_PROCESS", "1") };
+        let _env = EnvClean;
+        let dir = tempdir().unwrap();
+        let layout = layout_at(dir.path());
+        layout.ensure_dirs().unwrap();
+        promote_version(&layout, dir.path(), "c.tar.gz", "0.0.0-test-c", b"host-c");
+        unsafe { std::env::set_var("ORCA_HOST_UPDATE_FAILPOINT", "after_promote_before_receipt") };
+        let a_bytes = build_r5_archive("0.0.0-test-a", "test-any", b"host-a").unwrap();
+        let ap = dir.path().join("a.tar.gz");
+        fs::write(&ap, &a_bytes).unwrap();
+        sign_and_write_fixture_sig(&ap, &a_bytes).unwrap();
+        let staged_a = stage_archive(&layout, &ap, None, false).unwrap();
+        staged_a
+            .receipt
+            .write_atomic(&layout.receipt_path(&staged_a.receipt.receipt_digest))
+            .unwrap();
+        let _ = promote(&layout, &staged_a).unwrap_err();
+        let first = recover_abandoned(&layout).unwrap();
+        assert!(first >= 1);
+        let second = recover_abandoned(&layout).unwrap();
+        assert_eq!(second, 0, "second recovery must be a no-op");
     }
 }
