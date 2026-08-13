@@ -49,7 +49,7 @@ fn run(args: Vec<String>) -> Result<u8, String> {
         serde_json::from_slice(&record_raw).map_err(|e| format!("parse record: {e}"))?;
     let status = record.get("status").and_then(|v| v.as_str()).unwrap_or("");
     if status == "frozen-record"
-        && !matches!(cli.todo, 2 | 3 | 4 | 5 | 6 | 7 | 10 | 11 | 12 | 13)
+        && !matches!(cli.todo, 2 | 3 | 4 | 5 | 6 | 7 | 10 | 11 | 12 | 13 | 14)
     {
         return write_frozen_only(&cli, &root, &record_raw, &record);
     }
@@ -74,6 +74,8 @@ fn run(args: Vec<String>) -> Result<u8, String> {
         (12, Mode::Failure) => run_todo12_failure(&cli, &root, &record_raw, &record),
         (13, Mode::Happy) => run_todo13_happy(&cli, &root, &record_raw, &record),
         (13, Mode::Failure) => run_todo13_failure(&cli, &root, &record_raw, &record),
+        (14, Mode::Happy) => run_todo14_happy(&cli, &root, &record_raw, &record),
+        (14, Mode::Failure) => run_todo14_failure(&cli, &root, &record_raw, &record),
         (16, Mode::Happy) => run_todo16_happy(&cli, &root, &record_raw, &record),
         (16, Mode::Failure) => run_todo16_failure(&cli, &root, &record_raw, &record),
         (n, _) => Err(format!("todo {n} has no live runner yet")),
@@ -5579,6 +5581,442 @@ fn run_todo13_failure(
         asserts,
         status: "APPROVED",
         assertion_ids: &["T13-FAILURE-GUARDS"],
+    })
+}
+
+fn run_todo14_happy(
+    cli: &Cli,
+    root: &Path,
+    record_raw: &[u8],
+    _record: &serde_json::Value,
+) -> Result<u8, String> {
+    use std::time::Duration;
+    use xai_grok_pager::backend::connection::{
+        construct, BackendConnection, ExternalBackendTransport, UnavailableExternalTransport,
+    };
+    use xai_grok_pager::backend::external_stdio::{
+        write_file_sha256, ExternalStdioConfig, ExternalStdioLimits, ExternalStdioTransport,
+    };
+    use xai_grok_pager::backend::registry::BackendKind;
+    use xai_grok_pager::backend::selection::{ResolvedBackend, SelectionOrigin};
+
+    let mut cmds = Vec::new();
+    let mut asserts = Vec::new();
+    let owned = [
+        root.join("crates/codegen/xai-grok-pager/src/backend/external_stdio.rs"),
+        root.join("crates/codegen/xai-grok-pager/src/backend/external_stdio_test.rs"),
+        root.join("crates/codegen/xai-grok-pager/src/acp/spawn.rs"),
+    ];
+    if owned.iter().any(|p| !p.is_file()) {
+        asserts.push(assert_row("owned_paths", "FAIL", "Task 14 owned files missing"));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row(
+        "owned_paths",
+        "PASS",
+        "external_stdio + spawn composition",
+    ));
+
+    let mut t = UnavailableExternalTransport;
+    let native = ResolvedBackend {
+        backend_id: "native".into(),
+        version: None,
+        kind: BackendKind::Native,
+        origin: SelectionOrigin::NativeBuiltin,
+        receipt_digest: None,
+        pin: None,
+        warning: None,
+        native_start: true,
+    };
+    match construct(&native, &mut t) {
+        Ok(BackendConnection::Native) => asserts.push(assert_row(
+            "native_baseline",
+            "PASS",
+            "native construct unchanged",
+        )),
+        other => {
+            asserts.push(assert_row(
+                "native_baseline",
+                "FAIL",
+                &format!("{other:?}"),
+            ));
+            return finish(FinishInput {
+                cli,
+                root,
+                record_raw,
+                cmds,
+                asserts,
+                status: "REJECTED",
+                assertion_ids: &[],
+            });
+        }
+    }
+
+    let py = [
+        "/usr/bin/python3",
+        "/opt/homebrew/bin/python3",
+        "/usr/local/bin/python3",
+    ]
+    .into_iter()
+    .map(std::path::PathBuf::from)
+    .find(|p| p.is_file());
+    let Some(py) = py else {
+        asserts.push(assert_row(
+            "fixture_bridge",
+            "FAIL",
+            "no absolute python3 for fixture bridge",
+        ));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    };
+
+    let tmp = env::temp_dir().join(format!("orca-t14-happy-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&tmp);
+    fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
+    let script = tmp.join("bridge.py");
+    let body = br#"#!/usr/bin/env python3
+import sys, json
+for line in sys.stdin:
+    line=line.strip()
+    if not line: continue
+    msg=json.loads(line)
+    sys.stdout.write(json.dumps({"jsonrpc":"2.0","id":msg.get("id"),"result":{"ok":True}})+"\n")
+    sys.stdout.flush()
+"#;
+    write_file_sha256(&script, body).map_err(|e| e.to_string())?;
+    let receipt = "fd289aa1458324082cfac42747b709a263a11e5a159db751df76eb3edfb62cb4";
+    let cfg = ExternalStdioConfig {
+        executable: py.clone(),
+        argv: vec![
+            py.to_string_lossy().into_owned(),
+            script.to_string_lossy().into_owned(),
+        ],
+        cwd: tmp.clone(),
+        exe_content_sha256: String::new(),
+        receipt_digest: receipt.into(),
+        backend_id: "go-orca".into(),
+        limits: ExternalStdioLimits {
+            max_line_bytes: 64 * 1024,
+            max_stderr_bytes: 32 * 1024,
+            deadline: Duration::from_secs(5),
+        },
+    };
+    let mut transport = ExternalStdioTransport::new(cfg);
+    let backend = ResolvedBackend {
+        backend_id: "go-orca".into(),
+        version: Some("1.0.0".into()),
+        kind: BackendKind::External,
+        origin: SelectionOrigin::Explicit,
+        receipt_digest: Some(receipt.into()),
+        pin: None,
+        warning: None,
+        native_start: false,
+    };
+    let mut conn = transport.dispatch(&backend).map_err(|e| e.to_string())?;
+    conn.write_frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#)
+        .map_err(|e| e.to_string())?;
+    let frame = conn.read_frame().map_err(|e| e.to_string())?;
+    if !(frame.contains("ok") && conn.identity().pid > 0) {
+        asserts.push(assert_row(
+            "fixture_bridge",
+            "FAIL",
+            &format!("bad frame {frame}"),
+        ));
+        let _ = fs::remove_dir_all(&tmp);
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row(
+        "fixture_bridge",
+        "PASS",
+        "absolute argv echo NDJSON + pid identity",
+    ));
+    drop(conn);
+
+    cmds.push(cmd_row(
+        &["orca-todo-verify", "t14-happy", "external-stdio"],
+        root,
+        0,
+        "native+fixture-bridge",
+        "",
+    ));
+    asserts.push(assert_row(
+        "T14-HAPPY",
+        "PASS",
+        "verified external stdio transport behind Task-13 seam",
+    ));
+    let _ = fs::remove_dir_all(&tmp);
+    finish(FinishInput {
+        cli,
+        root,
+        record_raw,
+        cmds,
+        asserts,
+        status: "APPROVED",
+        assertion_ids: &["T14-HAPPY"],
+    })
+}
+
+fn run_todo14_failure(
+    cli: &Cli,
+    root: &Path,
+    record_raw: &[u8],
+    _record: &serde_json::Value,
+) -> Result<u8, String> {
+    use std::time::Duration;
+    use xai_grok_pager::backend::connection::ExternalBackendTransport;
+    use xai_grok_pager::backend::external_stdio::{
+        config_from_receipt, write_file_sha256, ExternalStdioConfig, ExternalStdioError,
+        ExternalStdioLimits, ExternalStdioTransport,
+    };
+    use xai_grok_pager::backend::registry::BackendKind;
+    use xai_grok_pager::backend::selection::{ResolvedBackend, SelectionOrigin};
+    use xai_grok_pager::plugin_host::receipts::{FileRole, InstallReceiptV1, InventoryFile, TrustState};
+
+    let mut cmds = Vec::new();
+    let mut asserts = Vec::new();
+
+    let receipt = InstallReceiptV1 {
+        schema_version: 1,
+        plugin_id: "go-orca".into(),
+        version: "1.0.0".into(),
+        archive_sha256: "a".repeat(64),
+        install_root: "go-orca/1.0.0".into(),
+        target: "darwin-aarch64".into(),
+        files: vec![InventoryFile {
+            relative_path: "bin/x".into(),
+            role: FileRole::Executable,
+            mode_octal: "0755".into(),
+            length: 1,
+            content_sha256: "b".repeat(64),
+        }],
+        trust: TrustState::Untrusted,
+        native_code: true,
+        capabilities: vec![],
+        permissions: vec![],
+        installed_at: "2026-08-03T00:00:00.000Z".into(),
+        receipt_digest: "c".repeat(64),
+    };
+    let err = config_from_receipt(
+        std::path::Path::new("/tmp"),
+        &receipt,
+        &["relative".into()],
+        ".",
+        ExternalStdioLimits::default(),
+    )
+    .unwrap_err();
+    if !matches!(err, ExternalStdioError::RelativeExecutable(_)) {
+        asserts.push(assert_row(
+            "relative_exe",
+            "FAIL",
+            &format!("{err:?}"),
+        ));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row("relative_exe", "PASS", "relative rejected"));
+
+    let err = config_from_receipt(
+        std::path::Path::new("/tmp"),
+        &receipt,
+        &["{bridge}".into(), "a|b".into()],
+        ".",
+        ExternalStdioLimits::default(),
+    )
+    .unwrap_err();
+    if !matches!(err, ExternalStdioError::ShellText(_)) {
+        asserts.push(assert_row("shell_text", "FAIL", &format!("{err:?}")));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row("shell_text", "PASS", "shell meta rejected"));
+
+    let py = [
+        "/usr/bin/python3",
+        "/opt/homebrew/bin/python3",
+        "/usr/local/bin/python3",
+    ]
+    .into_iter()
+    .map(std::path::PathBuf::from)
+    .find(|p| p.is_file());
+    let Some(py) = py else {
+        asserts.push(assert_row("digest_drift", "FAIL", "no python3"));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    };
+    let tmp = env::temp_dir().join(format!("orca-t14-fail-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&tmp);
+    fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
+    let script = tmp.join("bridge.py");
+    write_file_sha256(&script, b"print(1)\n").map_err(|e| e.to_string())?;
+    let cfg = ExternalStdioConfig {
+        executable: script.clone(),
+        argv: vec![
+            py.to_string_lossy().into_owned(),
+            script.to_string_lossy().into_owned(),
+        ],
+        cwd: tmp.clone(),
+        exe_content_sha256: "0".repeat(64),
+        receipt_digest: "d".repeat(64),
+        backend_id: "go-orca".into(),
+        limits: ExternalStdioLimits::default(),
+    };
+    let mut cfg2 = cfg.clone();
+    cfg2.executable = script;
+    let mut transport = ExternalStdioTransport::new(cfg2);
+    let backend = ResolvedBackend {
+        backend_id: "go-orca".into(),
+        version: None,
+        kind: BackendKind::External,
+        origin: SelectionOrigin::Explicit,
+        receipt_digest: Some("d".repeat(64)),
+        pin: None,
+        warning: None,
+        native_start: false,
+    };
+    let err = transport.dispatch(&backend).unwrap_err();
+    if !matches!(err, ExternalStdioError::DigestDrift { .. }) {
+        asserts.push(assert_row(
+            "digest_drift",
+            "FAIL",
+            &format!("{err:?}"),
+        ));
+        let _ = fs::remove_dir_all(&tmp);
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row(
+        "digest_drift",
+        "PASS",
+        "wrong digest refuses spawn",
+    ));
+
+    let script2 = tmp.join("echo.py");
+    write_file_sha256(
+        &script2,
+        br#"import sys,json
+for line in sys.stdin:
+  m=json.loads(line); print(json.dumps({"jsonrpc":"2.0","id":m.get("id"),"result":{}}), flush=True)
+"#,
+    )
+    .map_err(|e| e.to_string())?;
+    let cfg = ExternalStdioConfig {
+        executable: py.clone(),
+        argv: vec![
+            py.to_string_lossy().into_owned(),
+            script2.to_string_lossy().into_owned(),
+        ],
+        cwd: tmp.clone(),
+        exe_content_sha256: String::new(),
+        receipt_digest: "e".repeat(64),
+        backend_id: "go-orca".into(),
+        limits: ExternalStdioLimits {
+            max_line_bytes: 32,
+            max_stderr_bytes: 1024,
+            deadline: Duration::from_secs(3),
+        },
+    };
+    let mut transport = ExternalStdioTransport::new(cfg);
+    let backend = ResolvedBackend {
+        backend_id: "go-orca".into(),
+        version: None,
+        kind: BackendKind::External,
+        origin: SelectionOrigin::Explicit,
+        receipt_digest: Some("e".repeat(64)),
+        pin: None,
+        warning: None,
+        native_start: false,
+    };
+    let mut conn = transport.dispatch(&backend).map_err(|e| e.to_string())?;
+    let big = format!(r#"{{"x":"{}"}}"#, "z".repeat(64));
+    let err = conn.write_frame(&big).unwrap_err();
+    if !matches!(err, ExternalStdioError::LineTooLarge { .. }) {
+        asserts.push(assert_row("oversize", "FAIL", &format!("{err:?}")));
+        let _ = fs::remove_dir_all(&tmp);
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row("oversize", "PASS", "line cap enforced"));
+    drop(conn);
+
+    cmds.push(cmd_row(
+        &["orca-todo-verify", "t14-failure", "external-stdio-guards"],
+        root,
+        0,
+        "relative/shell/digest/oversize",
+        "",
+    ));
+    asserts.push(assert_row(
+        "T14-FAILURE-GUARDS",
+        "PASS",
+        "guards refuse unsafe external transport",
+    ));
+    let _ = fs::remove_dir_all(&tmp);
+    finish(FinishInput {
+        cli,
+        root,
+        record_raw,
+        cmds,
+        asserts,
+        status: "APPROVED",
+        assertion_ids: &["T14-FAILURE-GUARDS"],
     })
 }
 

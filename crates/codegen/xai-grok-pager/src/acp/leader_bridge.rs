@@ -3,6 +3,10 @@
 //! Adapts the leader's raw JSON string channels into the typed ACP channel
 //! interface, reusing `ClientSideConnection` from `agent_client_protocol`
 //! for JSON-RPC ser/deser.
+//!
+//! External backends (Task 14) use [`crate::backend::external_stdio`] for
+//! receipt-bound stdio process IO. A bridge child exit is reportable and
+//! restartable; it must never be treated as durable daemon lifetime.
 
 use std::sync::Arc;
 use std::thread;

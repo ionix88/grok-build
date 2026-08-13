@@ -3,8 +3,10 @@
 //! Task 11: installed-backend registry.
 //! Task 12: `--backend`, defaults, immutable session pins.
 //! Task 13: unified interactive/headless connection construction.
+//! Task 14: verified external ACP stdio transport.
 
 pub mod connection;
+pub mod external_stdio;
 pub mod registry;
 pub mod selection;
 pub mod session_pin;
@@ -12,6 +14,15 @@ pub mod session_pin;
 #[cfg(test)]
 mod connection_test;
 
+pub use connection::{
+    connect_external, construct, construct_with, BackendConnection, ConnectionError,
+    ConnectionLedger, ExternalBackendTransport, ExternalConnectionError, ExternalConnectionRequest,
+    ExternalOrchestration, ExternalTransportUnavailable, UnavailableExternalTransport,
+};
+pub use external_stdio::{
+    config_from_receipt, BridgeProcessIdentity, ExternalStdioConfig, ExternalStdioConnection,
+    ExternalStdioError, ExternalStdioLimits, ExternalStdioTransport,
+};
 pub use registry::{
     BackendConflict, BackendDescriptor, BackendKind, BackendRegistry, BackendRegistryError,
     Compatibility, DiscoverOpts, Enablement, HealthStatus, NATIVE_BACKEND_ID, NATIVE_SOURCE,
@@ -25,8 +36,3 @@ pub use selection::{
     SelectionInput, SelectionOrigin,
 };
 pub use session_pin::{ExternalActivateRequest, ExternalCreateRequest, PinStore, PinStoreError};
-pub use connection::{
-    connect_external, construct, construct_with, BackendConnection, ConnectionError,
-    ConnectionLedger, ExternalBackendTransport, ExternalConnectionError, ExternalConnectionRequest,
-    ExternalOrchestration, ExternalTransportUnavailable, UnavailableExternalTransport,
-};

@@ -1,7 +1,7 @@
 //! Agent spawning — creates the agent process and ACP channels.
 //!
-//! Simplified to only support GrokShell (in-process) mode.
-//! Subprocess and remote modes can be added later if needed.
+//! Native path: in-process GrokShell. External path (Task 14): verified
+//! receipt-bound stdio bridge via [`crate::backend::external_stdio`].
 
 use std::rc::Rc;
 use std::thread;
@@ -166,4 +166,52 @@ fn spawn_agent_thread_direct(
                 anyhow::Result::Ok(())
             })
         })?)
+}
+
+/// Launch a verified external ACP stdio bridge (Task 14).
+///
+/// Call only after Task-13 sealed Open barrier. Returns process identity and a
+/// live connection; bridge exit is reportable and does not imply daemon death.
+pub fn spawn_external_stdio(
+    config: crate::backend::external_stdio::ExternalStdioConfig,
+    cancel: &CancellationToken,
+) -> Result<(
+    crate::backend::external_stdio::ExternalStdioConnection,
+    crate::backend::external_stdio::BridgeProcessIdentity,
+)> {
+    let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag_watch = flag.clone();
+    let child_cancel = cancel.child_token();
+    // Mirror CancellationToken into the transport cancel flag.
+    std::thread::Builder::new()
+        .name("ext-stdio-cancel-watch".into())
+        .spawn(move || {
+            while !child_cancel.is_cancelled() {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            flag_watch.store(true, std::sync::atomic::Ordering::SeqCst);
+        })
+        .map_err(|e| anyhow::anyhow!(e))?;
+
+    let mut transport = crate::backend::external_stdio::ExternalStdioTransport {
+        config: config.clone(),
+        cancel: flag,
+    };
+    // Synthetic backend identity for dispatch receipt checks.
+    let backend = crate::backend::selection::ResolvedBackend {
+        backend_id: config.backend_id.clone(),
+        version: None,
+        kind: crate::backend::registry::BackendKind::External,
+        origin: crate::backend::selection::SelectionOrigin::Explicit,
+        receipt_digest: Some(config.receipt_digest.clone()),
+        pin: None,
+        warning: None,
+        native_start: false,
+    };
+    use crate::backend::connection::ExternalBackendTransport;
+    let conn = transport
+        .dispatch(&backend)
+        .map_err(|e| anyhow::anyhow!("external stdio: {e}"))?;
+    let id = conn.identity().clone();
+    Ok((conn, id))
 }

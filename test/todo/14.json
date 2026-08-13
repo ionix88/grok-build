@@ -3,25 +3,39 @@
   "todo": 14,
   "role": "orca",
   "title": "Launch verified external backends over ACP stdio",
-  "status": "frozen-record",
+  "status": "live",
   "happy": {
     "assertionId": "T14-HAPPY",
     "action": {
-      "kind": "deferred",
-      "subject": "task-14"
+      "kind": "in_process",
+      "subject": "external-stdio-transport"
     },
     "checks": [
-      "owned_by_later_task"
+      "owned_paths",
+      "native_baseline",
+      "fixture_bridge"
     ]
   },
   "failure": {
     "assertionId": "T14-FAILURE-GUARDS",
     "fixtures": [
       {
-        "id": "deferred",
-        "expect": "product_validation_deferred"
+        "id": "relative_exe",
+        "expect": "RelativeExecutable"
+      },
+      {
+        "id": "shell_text",
+        "expect": "ShellText"
+      },
+      {
+        "id": "digest_drift",
+        "expect": "DigestDrift"
+      },
+      {
+        "id": "oversize",
+        "expect": "LineTooLarge"
       }
     ]
   },
-  "note": "Product implementation is Task 14. This record is frozen by Task 2."
+  "note": "Task 14 live ORCA_QA: receipt-bound external ACP stdio; Task 13 seam preserved."
 }

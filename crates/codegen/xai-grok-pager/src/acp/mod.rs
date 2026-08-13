@@ -9,6 +9,8 @@ pub mod model_state;
 pub mod spawn;
 pub mod tracker;
 
+pub use spawn::spawn_external_stdio;
+
 use anyhow::Result;
 use tokio_util::sync::CancellationToken;
 
