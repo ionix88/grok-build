@@ -5,9 +5,9 @@
 //! connection ledger.
 
 use super::connection::{
-    BackendConnection, ConnectionError, ConnectionLedger, ExternalBackendTransport,
-    ExternalConnectionError, ExternalConnectionRequest, ExternalOrchestration,
-    UnavailableExternalTransport, connect_external, construct, construct_with, events,
+    connect_external, construct, construct_with, events, BackendConnection, ConnectionError,
+    ConnectionLedger, ExternalBackendTransport, ExternalConnectionError, ExternalConnectionRequest,
+    ExternalOrchestration, UnavailableExternalTransport,
 };
 use super::{BackendKind, ExternalActivateRequest, PinStore, ResolvedBackend, SelectionOrigin};
 use crate::plugin_host::lifecycle::{

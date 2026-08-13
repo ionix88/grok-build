@@ -15,8 +15,8 @@ use crate::plugin_host::lifecycle::{
     BarrierStateV1, BarrierWriter, ExternalPinState, HostBarrierV1, SessionPinV1,
 };
 use crate::plugin_host::{
-    BarrierError, BarrierStore, Supervisor, SupervisorError, assert_open_matches_pin,
-    mark_provision_failed, open_after_ready, require_open,
+    assert_open_matches_pin, mark_provision_failed, open_after_ready, require_open, BarrierError,
+    BarrierStore, Supervisor, SupervisorError,
 };
 use thiserror::Error;
 
