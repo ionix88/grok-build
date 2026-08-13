@@ -529,14 +529,13 @@ pub struct LaunchBackendRequest<'a> {
     pub mode: LaunchMode,
 }
 
-/// Native-allowed launch decision from [`prepare_launch`].
+/// Backend launch decision from [`prepare_launch`].
 #[derive(Debug, Clone)]
 pub struct LaunchBackendDecision {
     pub resolved: ResolvedBackend,
 }
 
-/// Resolve backend before native auth/ACP connect. Selection failures and
-/// external backends never start native on this path.
+/// Resolve backend before backend-specific auth/ACP connect.
 pub fn prepare_launch(
     req: &LaunchBackendRequest<'_>,
 ) -> Result<LaunchBackendDecision, SelectionError> {
@@ -599,12 +598,6 @@ pub fn prepare_launch_with_paths(
         pin_store: Some(&pin_store),
     };
     let resolved = resolve(&input)?;
-    if !resolved.native_start {
-        return Err(SelectionError::ExplicitFailed(format!(
-            "backend '{}' is external (receipt={:?}); refusing native start — external connection is not enabled on this launch path",
-            resolved.backend_id, resolved.receipt_digest
-        )));
-    }
     Ok(LaunchBackendDecision { resolved })
 }
 

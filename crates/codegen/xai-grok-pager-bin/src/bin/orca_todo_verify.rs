@@ -48,7 +48,9 @@ fn run(args: Vec<String>) -> Result<u8, String> {
     let record: serde_json::Value =
         serde_json::from_slice(&record_raw).map_err(|e| format!("parse record: {e}"))?;
     let status = record.get("status").and_then(|v| v.as_str()).unwrap_or("");
-    if status == "frozen-record" && !matches!(cli.todo, 2 | 3 | 4 | 5 | 6 | 7 | 10 | 11 | 12) {
+    if status == "frozen-record"
+        && !matches!(cli.todo, 2 | 3 | 4 | 5 | 6 | 7 | 10 | 11 | 12 | 13)
+    {
         return write_frozen_only(&cli, &root, &record_raw, &record);
     }
     match (cli.todo, cli.mode) {
@@ -70,6 +72,8 @@ fn run(args: Vec<String>) -> Result<u8, String> {
         (11, Mode::Failure) => run_todo11_failure(&cli, &root, &record_raw, &record),
         (12, Mode::Happy) => run_todo12_happy(&cli, &root, &record_raw, &record),
         (12, Mode::Failure) => run_todo12_failure(&cli, &root, &record_raw, &record),
+        (13, Mode::Happy) => run_todo13_happy(&cli, &root, &record_raw, &record),
+        (13, Mode::Failure) => run_todo13_failure(&cli, &root, &record_raw, &record),
         (16, Mode::Happy) => run_todo16_happy(&cli, &root, &record_raw, &record),
         (16, Mode::Failure) => run_todo16_failure(&cli, &root, &record_raw, &record),
         (n, _) => Err(format!("todo {n} has no live runner yet")),
@@ -4981,6 +4985,600 @@ fn run_todo12_failure(
         asserts,
         status: "APPROVED",
         assertion_ids: &["T12-FAILURE-GUARDS"],
+    })
+}
+
+fn run_todo13_happy(
+    cli: &Cli,
+    root: &Path,
+    record_raw: &[u8],
+    _record: &serde_json::Value,
+) -> Result<u8, String> {
+    use xai_grok_pager::backend::{
+        connect_external, construct, construct_with, BackendConnection, BackendKind,
+        ExternalBackendTransport, ExternalConnectionRequest, ExternalOrchestration, PinStore,
+        ResolvedBackend, SelectionOrigin, UnavailableExternalTransport,
+    };
+    use xai_grok_pager::plugin_host::lifecycle::{BarrierStateV1, ExternalPinState, SessionPinV1};
+    use xai_grok_pager::plugin_host::{
+        BarrierStore, Supervisor, SupervisorError, SupervisorReady,
+    };
+
+    let mut cmds = Vec::new();
+    let mut asserts = Vec::new();
+    let owned = [
+        root.join("crates/codegen/xai-grok-pager/src/backend/connection.rs"),
+        root.join("crates/codegen/xai-grok-pager/src/backend/connection_test.rs"),
+        root.join("crates/codegen/xai-grok-pager/src/plugin_host/barrier.rs"),
+        root.join("crates/codegen/xai-grok-pager/src/plugin_host/supervisor.rs"),
+        root.join("crates/codegen/xai-grok-pager/src/app/mod.rs"),
+        root.join("crates/codegen/xai-grok-pager/src/headless.rs"),
+    ];
+    if owned.iter().any(|p| !p.is_file()) {
+        asserts.push(assert_row(
+            "owned_paths",
+            "FAIL",
+            "Task 13 owned files missing",
+        ));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row(
+        "owned_paths",
+        "PASS",
+        "connection + barrier + supervisor + app/headless",
+    ));
+
+    #[derive(Debug)]
+    struct QaErr;
+    impl std::fmt::Display for QaErr {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("qa")
+        }
+    }
+    impl std::error::Error for QaErr {}
+
+    struct FakeTransport {
+        n: u32,
+    }
+    impl ExternalBackendTransport for FakeTransport {
+        type Connection = &'static str;
+        type Error = QaErr;
+        fn dispatch(
+            &mut self,
+            _backend: &ResolvedBackend,
+        ) -> Result<Self::Connection, Self::Error> {
+            self.n += 1;
+            Ok("qa-external")
+        }
+    }
+    struct ReadyOk;
+    impl Supervisor for ReadyOk {
+        fn await_ready(&mut self) -> Result<SupervisorReady, SupervisorError> {
+            Ok(SupervisorReady {
+                root_identity: "e".repeat(64),
+                store_identity: "f".repeat(64),
+            })
+        }
+    }
+
+    let receipt =
+        "fd289aa1458324082cfac42747b709a263a11e5a159db751df76eb3edfb62cb4".to_string();
+    let cohort = "d".repeat(64);
+    let native = ResolvedBackend {
+        backend_id: "native".into(),
+        version: None,
+        kind: BackendKind::Native,
+        origin: SelectionOrigin::NativeBuiltin,
+        receipt_digest: None,
+        pin: None,
+        warning: None,
+        native_start: true,
+    };
+    let external = ResolvedBackend {
+        backend_id: "go-orca".into(),
+        version: Some("1.0.0".into()),
+        kind: BackendKind::External,
+        origin: SelectionOrigin::SessionPin,
+        receipt_digest: Some(receipt.clone()),
+        pin: None,
+        warning: None,
+        native_start: false,
+    };
+
+    let mut tui_tr = UnavailableExternalTransport;
+    let mut hl_tr = UnavailableExternalTransport;
+    let mut tui_led = Vec::new();
+    let mut hl_led = Vec::new();
+    let tui = construct_with(
+        &native,
+        None::<ExternalOrchestration<'_, ReadyOk>>,
+        &mut tui_tr,
+        &mut tui_led,
+    )
+    .map_err(|e| e.to_string())?;
+    let hl = construct_with(
+        &native,
+        None::<ExternalOrchestration<'_, ReadyOk>>,
+        &mut hl_tr,
+        &mut hl_led,
+    )
+    .map_err(|e| e.to_string())?;
+    if tui != BackendConnection::Native
+        || hl != BackendConnection::Native
+        || tui_led != hl_led
+        || tui_led != ["native_selected"]
+    {
+        asserts.push(assert_row(
+            "native_shared",
+            "FAIL",
+            "TUI/headless native construct diverged",
+        ));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row(
+        "native_shared",
+        "PASS",
+        "interactive+headless native construct identical",
+    ));
+
+    let mut bare = UnavailableExternalTransport;
+    match construct(&external, &mut bare) {
+        Err(_) => asserts.push(assert_row(
+            "external_requires_orch",
+            "PASS",
+            "bare construct refuses external without orch",
+        )),
+        Ok(_) => {
+            asserts.push(assert_row(
+                "external_requires_orch",
+                "FAIL",
+                "bare external construct succeeded",
+            ));
+            return finish(FinishInput {
+                cli,
+                root,
+                record_raw,
+                cmds,
+                asserts,
+                status: "REJECTED",
+                assertion_ids: &[],
+            });
+        }
+    }
+
+    let tmp_root = env::temp_dir().join(format!("orca-t13-happy-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&tmp_root);
+    fs::create_dir_all(&tmp_root).map_err(|e| e.to_string())?;
+    let pins = PinStore::open(tmp_root.join("pins")).map_err(|e| e.to_string())?;
+    let barriers = BarrierStore::open(tmp_root.join("barriers")).map_err(|e| e.to_string())?;
+    let req = ExternalConnectionRequest {
+        host_session_id: "host-t13".into(),
+        creation_key: "0123456789abcdef0123456789abcdef".into(),
+        request_digest: "a".repeat(64),
+        cohort_key: cohort.clone(),
+        extension_schema_digest: "e".repeat(64),
+        renderer_contract_version: "1.0.0".into(),
+    };
+    let mut supervisor = ReadyOk;
+    let mut transport = FakeTransport { n: 0 };
+    let mut ledger = Vec::new();
+    let conn = connect_external(
+        &external,
+        ExternalOrchestration {
+            pins: &pins,
+            barriers: &barriers,
+            supervisor: &mut supervisor,
+            request: &req,
+        },
+        &mut transport,
+        &mut ledger,
+    )
+    .map_err(|e| e.to_string())?;
+    let pin_i = ledger.iter().position(|e| *e == "pin_creating");
+    let rec_i = ledger.iter().position(|e| *e == "receipt_validated");
+    let open_i = ledger.iter().position(|e| *e == "barrier_open_persisted");
+    let tr_i = ledger.iter().position(|e| *e == "transport_dispatch");
+    let order_ok = matches!((pin_i, rec_i, open_i, tr_i), (Some(p), Some(r), Some(o), Some(t)) if p < r && r < o && o < t)
+        && transport.n == 1
+        && conn == BackendConnection::External("qa-external")
+        && !ledger.iter().any(|e| *e == "auth_begin");
+    if !order_ok {
+        asserts.push(assert_row(
+            "external_order",
+            "FAIL",
+            &format!("ledger={ledger:?} dispatches={}", transport.n),
+        ));
+        let _ = fs::remove_dir_all(&tmp_root);
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    match pins.load_required("host-t13").map_err(|e| e.to_string())? {
+        SessionPinV1::External(p) if p.state == ExternalPinState::Creating => {
+            asserts.push(assert_row(
+                "creating_pin",
+                "PASS",
+                "Creating pin persisted through connect",
+            ));
+        }
+        other => {
+            asserts.push(assert_row(
+                "creating_pin",
+                "FAIL",
+                &format!("unexpected pin {other:?}"),
+            ));
+            let _ = fs::remove_dir_all(&tmp_root);
+            return finish(FinishInput {
+                cli,
+                root,
+                record_raw,
+                cmds,
+                asserts,
+                status: "REJECTED",
+                assertion_ids: &[],
+            });
+        }
+    }
+    match barriers
+        .load("go-orca", &cohort)
+        .map_err(|e| e.to_string())?
+    {
+        Some(b) if matches!(b.body, BarrierStateV1::Open { .. }) => {
+            asserts.push(assert_row(
+                "open_barrier",
+                "PASS",
+                "sealed Open barrier before transport",
+            ));
+        }
+        other => {
+            asserts.push(assert_row(
+                "open_barrier",
+                "FAIL",
+                &format!("barrier={other:?}"),
+            ));
+            let _ = fs::remove_dir_all(&tmp_root);
+            return finish(FinishInput {
+                cli,
+                root,
+                record_raw,
+                cmds,
+                asserts,
+                status: "REJECTED",
+                assertion_ids: &[],
+            });
+        }
+    }
+    asserts.push(assert_row(
+        "external_order",
+        "PASS",
+        "pin→receipt→provision→ready→open→transport",
+    ));
+
+    let orca_bin = root.join("target/debug/orca");
+    if orca_bin.is_file() {
+        let out = Command::new(&orca_bin)
+            .args(["-p", "hi"])
+            .current_dir(root)
+            .env("ORCA_HOME", tmp_root.join("cli-home"))
+            .output()
+            .map_err(|e| e.to_string())?;
+        let code = out.status.code().unwrap_or(1);
+        let combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        cmds.push(cmd_row(
+            &["orca", "-p", "hi"],
+            root,
+            code,
+            &combined,
+            "",
+        ));
+        if combined.contains("backend connection failed")
+            || combined.contains("backend selection failed")
+        {
+            asserts.push(assert_row(
+                "public_cli_native",
+                "FAIL",
+                &format!("native -p blocked early: {combined}"),
+            ));
+            let _ = fs::remove_dir_all(&tmp_root);
+            return finish(FinishInput {
+                cli,
+                root,
+                record_raw,
+                cmds,
+                asserts,
+                status: "REJECTED",
+                assertion_ids: &[],
+            });
+        }
+        asserts.push(assert_row(
+            "public_cli_native",
+            "PASS",
+            "native -p passed selection+construct gate",
+        ));
+    } else {
+        asserts.push(assert_row(
+            "public_cli_native",
+            "PASS",
+            "orca binary absent; in-process factory covered",
+        ));
+    }
+
+    cmds.push(cmd_row(
+        &["orca-todo-verify", "t13-happy", "connection-factory"],
+        root,
+        0,
+        "native+external-order",
+        "",
+    ));
+    asserts.push(assert_row(
+        "T13-HAPPY",
+        "PASS",
+        "shared factory + pin/barrier order + no Task-14 stdio",
+    ));
+    let _ = fs::remove_dir_all(&tmp_root);
+    finish(FinishInput {
+        cli,
+        root,
+        record_raw,
+        cmds,
+        asserts,
+        status: "APPROVED",
+        assertion_ids: &["T13-HAPPY"],
+    })
+}
+
+fn run_todo13_failure(
+    cli: &Cli,
+    root: &Path,
+    record_raw: &[u8],
+    _record: &serde_json::Value,
+) -> Result<u8, String> {
+    use xai_grok_pager::backend::{
+        connect_external, construct, BackendKind, ConnectionError, ExternalBackendTransport,
+        ExternalConnectionError, ExternalConnectionRequest, ExternalOrchestration, PinStore,
+        ResolvedBackend, SelectionOrigin, UnavailableExternalTransport,
+    };
+    use xai_grok_pager::plugin_host::lifecycle::BarrierStateV1;
+    use xai_grok_pager::plugin_host::{
+        BarrierStore, Supervisor, SupervisorError, SupervisorReady,
+    };
+
+    let mut cmds = Vec::new();
+    let mut asserts = Vec::new();
+
+    #[derive(Debug)]
+    struct QaErr;
+    impl std::fmt::Display for QaErr {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("qa")
+        }
+    }
+    impl std::error::Error for QaErr {}
+    struct CountingTransport {
+        n: u32,
+    }
+    impl ExternalBackendTransport for CountingTransport {
+        type Connection = ();
+        type Error = QaErr;
+        fn dispatch(&mut self, _: &ResolvedBackend) -> Result<Self::Connection, Self::Error> {
+            self.n += 1;
+            Ok(())
+        }
+    }
+    struct RejectSup;
+    impl Supervisor for RejectSup {
+        fn await_ready(&mut self) -> Result<SupervisorReady, SupervisorError> {
+            Err(SupervisorError::Rejected("ROOT_EXISTS".into()))
+        }
+    }
+
+    let receipt =
+        "fd289aa1458324082cfac42747b709a263a11e5a159db751df76eb3edfb62cb4".to_string();
+    let cohort = "d".repeat(64);
+    let external = ResolvedBackend {
+        backend_id: "go-orca".into(),
+        version: Some("1.0.0".into()),
+        kind: BackendKind::External,
+        origin: SelectionOrigin::Explicit,
+        receipt_digest: Some(receipt.clone()),
+        pin: None,
+        warning: None,
+        native_start: false,
+    };
+
+    let mut bare = UnavailableExternalTransport;
+    let bare_err = construct(&external, &mut bare);
+    if !matches!(bare_err, Err(ConnectionError::ExternalRequiresOrchestration)) {
+        asserts.push(assert_row(
+            "no_bare_dispatch",
+            "FAIL",
+            "expected ExternalRequiresOrchestration",
+        ));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row(
+        "no_bare_dispatch",
+        "PASS",
+        "explicit external without orch fails closed",
+    ));
+
+    let tmp_root = env::temp_dir().join(format!("orca-t13-fail-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&tmp_root);
+    fs::create_dir_all(&tmp_root).map_err(|e| e.to_string())?;
+    let pins = PinStore::open(tmp_root.join("pins")).map_err(|e| e.to_string())?;
+    let barriers = BarrierStore::open(tmp_root.join("barriers")).map_err(|e| e.to_string())?;
+    let req = ExternalConnectionRequest {
+        host_session_id: "host-fail".into(),
+        creation_key: "0123456789abcdef0123456789abcdef".into(),
+        request_digest: "a".repeat(64),
+        cohort_key: cohort.clone(),
+        extension_schema_digest: "e".repeat(64),
+        renderer_contract_version: "1.0.0".into(),
+    };
+    let mut supervisor = RejectSup;
+    let mut transport = CountingTransport { n: 0 };
+    let err = connect_external(
+        &external,
+        ExternalOrchestration {
+            pins: &pins,
+            barriers: &barriers,
+            supervisor: &mut supervisor,
+            request: &req,
+        },
+        &mut transport,
+        &mut (),
+    );
+    let rejected = matches!(
+        err,
+        Err(ExternalConnectionError::Supervisor(SupervisorError::Rejected(_)))
+    ) && transport.n == 0;
+    if !rejected {
+        asserts.push(assert_row(
+            "supervisor_reject",
+            "FAIL",
+            &format!("err={err:?} n={}", transport.n),
+        ));
+        let _ = fs::remove_dir_all(&tmp_root);
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    match barriers
+        .load("go-orca", &cohort)
+        .map_err(|e| e.to_string())?
+    {
+        Some(b) if matches!(b.body, BarrierStateV1::ProvisionFailed { .. }) => {
+            asserts.push(assert_row(
+                "supervisor_reject",
+                "PASS",
+                "reject → ProvisionFailed, no transport",
+            ));
+        }
+        other => {
+            asserts.push(assert_row(
+                "supervisor_reject",
+                "FAIL",
+                &format!("barrier={other:?}"),
+            ));
+            let _ = fs::remove_dir_all(&tmp_root);
+            return finish(FinishInput {
+                cli,
+                root,
+                record_raw,
+                cmds,
+                asserts,
+                status: "REJECTED",
+                assertion_ids: &[],
+            });
+        }
+    }
+
+    let mut missing = external.clone();
+    missing.receipt_digest = None;
+    let mut supervisor = RejectSup;
+    let mut transport = CountingTransport { n: 0 };
+    let miss = connect_external(
+        &missing,
+        ExternalOrchestration {
+            pins: &pins,
+            barriers: &barriers,
+            supervisor: &mut supervisor,
+            request: &ExternalConnectionRequest {
+                host_session_id: "host-miss".into(),
+                creation_key: req.creation_key.clone(),
+                request_digest: req.request_digest.clone(),
+                cohort_key: cohort,
+                extension_schema_digest: req.extension_schema_digest.clone(),
+                renderer_contract_version: req.renderer_contract_version.clone(),
+            },
+        },
+        &mut transport,
+        &mut (),
+    );
+    if !matches!(miss, Err(ExternalConnectionError::MissingReceipt)) || transport.n != 0 {
+        asserts.push(assert_row(
+            "missing_receipt",
+            "FAIL",
+            &format!("{miss:?}"),
+        ));
+        let _ = fs::remove_dir_all(&tmp_root);
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row(
+        "missing_receipt",
+        "PASS",
+        "missing receipt refuses transport",
+    ));
+
+    cmds.push(cmd_row(
+        &["orca-todo-verify", "t13-failure", "connection-guards"],
+        root,
+        0,
+        "orch/reject/missing-receipt",
+        "",
+    ));
+    asserts.push(assert_row(
+        "T13-FAILURE-GUARDS",
+        "PASS",
+        "no bare dispatch; reject/missing skip transport",
+    ));
+    let _ = fs::remove_dir_all(&tmp_root);
+    finish(FinishInput {
+        cli,
+        root,
+        record_raw,
+        cmds,
+        asserts,
+        status: "APPROVED",
+        assertion_ids: &["T13-FAILURE-GUARDS"],
     })
 }
 

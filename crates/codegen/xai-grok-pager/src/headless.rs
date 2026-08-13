@@ -864,14 +864,14 @@ pub async fn run_single_turn(
             anyhow::bail!("{msg}");
         }
     };
-    if !launch.resolved.native_start {
-        let msg = format!(
-            "backend selection refused native start (backend={})",
-            launch.resolved.backend_id
-        );
-        emitter.on_error(&msg);
-        anyhow::bail!("{msg}");
-    }
+    let mut external_transport = crate::backend::connection::UnavailableExternalTransport;
+    crate::backend::connection::construct(&launch.resolved, &mut external_transport).map_err(
+        |error| {
+            let message = format!("backend connection failed: {error}");
+            emitter.on_error(&message);
+            anyhow::anyhow!(message)
+        },
+    )?;
 
     // Load config and spawn agent (native only after selection gate).
     let t_spawn = Instant::now();

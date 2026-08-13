@@ -491,12 +491,10 @@ pub async fn run(
     if let Some(ref warning) = launch.resolved.warning {
         eprintln!("{warning}");
     }
-    if !launch.resolved.native_start {
-        anyhow::bail!(
-            "backend selection refused native start (backend={})",
-            launch.resolved.backend_id
-        );
-    }
+    let mut external_transport = crate::backend::connection::UnavailableExternalTransport;
+    crate::backend::connection::construct(&launch.resolved, &mut external_transport).map_err(
+        |error| anyhow::anyhow!("backend connection failed: {error}"),
+    )?;
     let raw_config = xai_grok_shell::config::load_effective_config()
         .map_err(|e| anyhow::anyhow!("Failed to load config: {e}"))?;
     let grok_com_config = match xai_grok_shell::agent::config::Config::new_from_toml_cfg(

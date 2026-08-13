@@ -3,25 +3,39 @@
   "todo": 13,
   "role": "orca",
   "title": "Unify backend connection construction for TUI and -p",
-  "status": "frozen-record",
+  "status": "live",
   "happy": {
     "assertionId": "T13-HAPPY",
     "action": {
-      "kind": "deferred",
-      "subject": "task-13"
+      "kind": "in_process",
+      "subject": "backend-connection-factory"
     },
     "checks": [
-      "owned_by_later_task"
+      "owned_paths",
+      "native_shared",
+      "external_requires_orch",
+      "creating_pin",
+      "open_barrier",
+      "external_order",
+      "public_cli_native"
     ]
   },
   "failure": {
     "assertionId": "T13-FAILURE-GUARDS",
     "fixtures": [
       {
-        "id": "deferred",
-        "expect": "product_validation_deferred"
+        "id": "no_bare_dispatch",
+        "expect": "ExternalRequiresOrchestration"
+      },
+      {
+        "id": "supervisor_reject",
+        "expect": "ProvisionFailed_no_transport"
+      },
+      {
+        "id": "missing_receipt",
+        "expect": "MissingReceipt"
       }
     ]
   },
-  "note": "Product implementation is Task 13. This record is frozen by Task 2."
+  "note": "Task 13 live ORCA_QA: shared factory, pin→Open→transport seam; Task 14 owns stdio."
 }

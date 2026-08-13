@@ -1,7 +1,9 @@
+pub mod barrier;
 pub mod canonical;
 pub mod lifecycle;
 pub mod paths;
 pub mod receipts;
+pub mod supervisor;
 
 pub use paths::{HostPaths, host_orca_paths};
 pub use receipts::{
@@ -15,3 +17,8 @@ pub use lifecycle::{
     ExternalPinV1, GcPlanV1, HostBarrierV1, LifecycleError, NativePinV1, PurgeEntryV1,
     PurgeJournalPhase, PurgeJournalV1, PurgeMemberV1, PurgePlanV1, RollbackReceiptV1, SessionPinV1,
 };
+pub use barrier::{
+    assert_open_matches_pin, mark_provision_failed, open_after_ready, require_open, BarrierError,
+    BarrierStore,
+};
+pub use supervisor::{Supervisor, SupervisorError, SupervisorReady};

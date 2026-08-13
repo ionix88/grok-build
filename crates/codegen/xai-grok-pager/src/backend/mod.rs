@@ -2,10 +2,15 @@
 //!
 //! Task 11: installed-backend registry.
 //! Task 12: `--backend`, defaults, immutable session pins.
+//! Task 13: unified interactive/headless connection construction.
 
+pub mod connection;
 pub mod registry;
 pub mod selection;
 pub mod session_pin;
+
+#[cfg(test)]
+mod connection_test;
 
 pub use registry::{
     BackendConflict, BackendDescriptor, BackendKind, BackendRegistry, BackendRegistryError,
@@ -20,3 +25,8 @@ pub use selection::{
     SelectionInput, SelectionOrigin,
 };
 pub use session_pin::{ExternalActivateRequest, ExternalCreateRequest, PinStore, PinStoreError};
+pub use connection::{
+    connect_external, construct, construct_with, BackendConnection, ConnectionError,
+    ConnectionLedger, ExternalBackendTransport, ExternalConnectionError, ExternalConnectionRequest,
+    ExternalOrchestration, ExternalTransportUnavailable, UnavailableExternalTransport,
+};
