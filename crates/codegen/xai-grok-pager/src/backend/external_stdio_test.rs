@@ -418,6 +418,49 @@ fn hang_read_exceeds_deadline_without_caller_cancel() {
 }
 
 #[test]
+fn write_hang_exceeds_deadline_without_caller_cancel() {
+    // Given: hung fixture that never reads stdin; short write deadline.
+    let Some(_) = absolute_python() else {
+        return;
+    };
+    let (_tmp, mut cfg) = make_fixture_layout("hang");
+    cfg.limits.deadline = Duration::from_millis(400);
+    cfg.limits.max_line_bytes = 256 * 1024;
+    let mut transport = ExternalStdioTransport::new(cfg.clone());
+    let mut conn = transport
+        .dispatch(&external_backend(&cfg.receipt_digest))
+        .unwrap();
+    let payload = format!(r#"{{"d":"{}"}}"#, "x".repeat(200_000));
+    // When: fill the stdin pipe until write blocks; transport must deadline
+    // (no cancel_bridge / Drop from the test as the timeout mechanism).
+    let started = std::time::Instant::now();
+    let mut err = None;
+    loop {
+        match conn.write_frame(&payload) {
+            Ok(()) => {
+                if started.elapsed() > Duration::from_secs(5) {
+                    panic!("write_frame kept succeeding for 5s without deadline");
+                }
+            }
+            Err(e) => {
+                err = Some(e);
+                break;
+            }
+        }
+    }
+    let elapsed = started.elapsed();
+    // Then: DeadlineExceeded from limits.deadline, not test harness cancel.
+    assert!(
+        matches!(err, Some(ExternalStdioError::DeadlineExceeded)),
+        "expected DeadlineExceeded, got {err:?}"
+    );
+    assert!(
+        elapsed >= Duration::from_millis(300) && elapsed < Duration::from_secs(4),
+        "elapsed {elapsed:?}"
+    );
+}
+
+#[test]
 fn cancellation_kills_bridge_only() {
     let Some(_) = absolute_python() else {
         return;

@@ -242,7 +242,7 @@ impl ExternalBackendTransport for ExternalStdioTransport {
 /// Live external bridge with bounded NDJSON IO and Drop cleanup.
 pub struct ExternalStdioConnection {
     child: Child,
-    stdin: ChildStdin,
+    stdin: Arc<Mutex<ChildStdin>>,
     stdout_rx: Receiver<StdoutEvent>,
     stderr_rx: Receiver<StderrEvent>,
     _stdout_thread: JoinHandle<()>,
@@ -288,7 +288,10 @@ impl ExternalStdioConnection {
         self.last_exit_code
     }
 
-    /// Write one NDJSON line (appends `\n` if missing). Honors cancel.
+    /// Write one NDJSON line (appends `\n` if missing).
+    ///
+    /// Blocks at most `limits.deadline` (including flush). On expiry kills/reaps
+    /// only this bridge child and returns [`ExternalStdioError::DeadlineExceeded`].
     pub fn write_frame(&mut self, frame: &str) -> Result<(), ExternalStdioError> {
         self.check_cancel()?;
         self.drain_stderr_events()?;
@@ -301,17 +304,57 @@ impl ExternalStdioConnection {
                 max: self.limits.max_line_bytes,
             });
         }
-        self.stdin.write_all(&line).map_err(|e| {
-            if self.child_exited() {
-                ExternalStdioError::BridgeExited {
-                    code: self.try_exit_code(),
-                }
-            } else {
-                ExternalStdioError::Io(e.to_string())
+
+        let deadline = Instant::now() + self.limits.deadline;
+        let stdin = Arc::clone(&self.stdin);
+        let (tx, rx) = mpsc::channel();
+        let writer = thread::Builder::new()
+            .name("ext-stdio-write".into())
+            .spawn(move || {
+                let mut guard = match stdin.lock() {
+                    Ok(g) => g,
+                    Err(p) => p.into_inner(),
+                };
+                let res = guard
+                    .write_all(&line)
+                    .and_then(|_| guard.flush())
+                    .map_err(|e| e.to_string());
+                let _ = tx.send(res);
+            })
+            .map_err(|e| ExternalStdioError::Spawn(e.to_string()))?;
+
+        let wait = deadline.saturating_duration_since(Instant::now());
+        match rx.recv_timeout(wait) {
+            Ok(Ok(())) => {
+                let _ = writer.join();
+                Ok(())
             }
-        })?;
-        self.stdin.flush()?;
-        Ok(())
+            Ok(Err(msg)) => {
+                let _ = writer.join();
+                if self.child_exited() {
+                    Err(ExternalStdioError::BridgeExited {
+                        code: self.try_exit_code(),
+                    })
+                } else {
+                    Err(ExternalStdioError::Io(msg))
+                }
+            }
+            Err(RecvTimeoutError::Timeout) => {
+                let _ = self.kill_bridge_only();
+                let _ = writer.join();
+                Err(ExternalStdioError::DeadlineExceeded)
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                let _ = writer.join();
+                if self.child_exited() {
+                    Err(ExternalStdioError::BridgeExited {
+                        code: self.try_exit_code(),
+                    })
+                } else {
+                    Err(ExternalStdioError::Io("write worker disconnected".into()))
+                }
+            }
+        }
     }
 
     /// Read one NDJSON line (without trailing newline).
@@ -559,7 +602,7 @@ fn spawn_bridge(
 
     Ok(ExternalStdioConnection {
         child,
-        stdin,
+        stdin: Arc::new(Mutex::new(stdin)),
         stdout_rx: out_rx,
         stderr_rx: err_rx,
         _stdout_thread: stdout_thread,
