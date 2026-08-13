@@ -760,8 +760,12 @@ mod tests {
         HostLayout::from_paths(&paths, root)
     }
 
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     fn with_fixture_keys<R>(f: impl FnOnce() -> R) -> R {
-        let _g = ENV_LOCK.lock().unwrap();
+        let _g = env_lock();
         install_fixture_trust_env();
         let r = f();
         clear_fixture_trust_env();
@@ -862,7 +866,7 @@ mod tests {
 
     #[test]
     fn missing_release_key_external_required() {
-        let _g = ENV_LOCK.lock().unwrap();
+        let _g = env_lock();
         clear_fixture_trust_env();
         let dir = tempdir().unwrap();
         let layout = test_layout(dir.path());

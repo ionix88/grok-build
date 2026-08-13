@@ -194,6 +194,10 @@ mod tests {
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     fn layout_at(root: &std::path::Path) -> HostLayout {
         let paths = xai_grok_config::OrcaPaths {
             config_file: root.join("config.toml"),
@@ -209,9 +213,12 @@ mod tests {
 
     #[test]
     fn rollback_incompatible_target_refused() {
-        let _g = ENV_LOCK.lock().unwrap();
+        let _g = env_lock();
         install_fixture_trust_env();
-        unsafe { std::env::set_var("ORCA_HOST_UPDATE_IN_PROCESS", "1") };
+        unsafe {
+            std::env::set_var("ORCA_HOST_UPDATE_IN_PROCESS", "1");
+            std::env::remove_var("ORCA_HOST_UPDATE_FAILPOINT");
+        }
         let dir = tempdir().unwrap();
         let layout = layout_at(dir.path());
         layout.ensure_dirs().unwrap();

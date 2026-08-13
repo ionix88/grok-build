@@ -296,6 +296,10 @@ mod tests {
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     fn layout_at(root: &Path) -> HostLayout {
         let paths = xai_grok_config::OrcaPaths {
             config_file: root.join("config.toml"),
@@ -319,9 +323,12 @@ mod tests {
 
     #[test]
     fn va_to_vb_and_rollback() {
-        let _g = ENV_LOCK.lock().unwrap();
+        let _g = env_lock();
         install_fixture_trust_env();
-        unsafe { std::env::set_var("ORCA_HOST_UPDATE_IN_PROCESS", "1") };
+        unsafe {
+            std::env::set_var("ORCA_HOST_UPDATE_IN_PROCESS", "1");
+            std::env::remove_var("ORCA_HOST_UPDATE_FAILPOINT");
+        }
         let dir = tempdir().unwrap();
         let layout = layout_at(dir.path());
         layout.ensure_dirs().unwrap();
@@ -353,7 +360,10 @@ mod tests {
         let rolled = rollback(&layout, None).unwrap();
         assert_eq!(rolled.version, "0.0.0-test-a");
         assert_eq!(fs::read(&layout.managed_bin).unwrap(), b"payload-va");
-        unsafe { std::env::remove_var("ORCA_HOST_UPDATE_IN_PROCESS") };
+        unsafe {
+            std::env::remove_var("ORCA_HOST_UPDATE_IN_PROCESS");
+            std::env::remove_var("ORCA_HOST_UPDATE_FAILPOINT");
+        }
         clear_fixture_trust_env();
         let _ = host_bin_name();
         let _ = sha256_hex;
@@ -362,8 +372,9 @@ mod tests {
 
     #[test]
     fn check_is_readonly_no_dirs_created() {
-        let _g = ENV_LOCK.lock().unwrap();
+        let _g = env_lock();
         clear_fixture_trust_env();
+        unsafe { std::env::remove_var("ORCA_HOST_UPDATE_FAILPOINT") };
         let dir = tempdir().unwrap();
         let orca_home = dir.path().join("orca");
         fs::create_dir_all(&orca_home).unwrap();
@@ -384,8 +395,9 @@ mod tests {
 
     #[test]
     fn check_rejects_stale_forged_current() {
-        let _g = ENV_LOCK.lock().unwrap();
+        let _g = env_lock();
         clear_fixture_trust_env();
+        unsafe { std::env::remove_var("ORCA_HOST_UPDATE_FAILPOINT") };
         let dir = tempdir().unwrap();
         let orca_home = dir.path().join("orca");
         let state_host = orca_home.join("state/host");
