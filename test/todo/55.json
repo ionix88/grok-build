@@ -2,26 +2,40 @@
   "schemaVersion": 1,
   "todo": 55,
   "role": "orca",
-  "title": "Host release artifacts and doctor",
-  "status": "frozen-record",
+  "title": "Synchronize the Orca fork and package independent host artifacts",
+  "status": "live",
   "happy": {
     "assertionId": "T55-HAPPY",
     "action": {
-      "kind": "deferred",
+      "kind": "host-release",
       "subject": "task-55"
     },
     "checks": [
-      "owned_by_later_task"
+      "owned_paths",
+      "source_sync_docs",
+      "empty_shard_aggregate",
+      "host_artifact_set_build",
+      "dual_build_byte_equal",
+      "resolver_path",
+      "verify_host",
+      "host_only_identity",
+      "root_cargo_unchanged",
+      "diagnostics_orca_copy",
+      "native_only_doctor"
     ]
   },
   "failure": {
     "assertionId": "T55-FAILURE-GUARDS",
     "fixtures": [
-      {
-        "id": "deferred",
-        "expect": "product_validation_deferred"
-      }
+      { "id": "source_sync_conflict", "expect": "typed_refusal" },
+      { "id": "archive_signature_drift", "expect": "typed_refusal" },
+      { "id": "target_ambiguity", "expect": "typed_refusal" },
+      { "id": "go_embedding_path", "expect": "typed_refusal" },
+      { "id": "combined_result", "expect": "typed_refusal" },
+      { "id": "plugin_required_startup", "expect": "typed_refusal" },
+      { "id": "generated_cargo_drift", "expect": "typed_refusal" },
+      { "id": "unsupported_promotion", "expect": "typed_refusal" }
     ]
   },
-  "note": "Product implementation is Task 55. This record is frozen by Task 2."
+  "note": "Live Task 55 QA: independent Orca host packaging, source-sync, doctor, HostArtifactSetResultV1."
 }

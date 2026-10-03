@@ -255,3 +255,31 @@ fn probe_status(status: ProbeStatus) -> &'static str {
         ProbeStatus::Error => "error",
     }
 }
+
+/// Human section for optional plugin diagnostics (Task 55 host doctor).
+/// Never implies install/execution authority.
+pub(super) fn format_plugin_diagnostics(view: &super::PluginDiagnosticsView) -> String {
+    use super::{PluginDiagnosticsIssue, PluginDiagnosticsView};
+    match view {
+        PluginDiagnosticsView::Absent => {
+            "Plugin diagnostics\n  (none — native-only)\n".to_owned()
+        }
+        PluginDiagnosticsView::Accepted {
+            status,
+            backend_id,
+        } => format!(
+            "Plugin diagnostics\n  backend: {backend_id}\n  status: {status}\n  authority: none (informational only)\n"
+        ),
+        PluginDiagnosticsView::Reported { kind, detail } => {
+            let label = match kind {
+                PluginDiagnosticsIssue::Missing => "missing",
+                PluginDiagnosticsIssue::Malformed => "malformed",
+                PluginDiagnosticsIssue::UnauthorizedField => "unauthorized-field",
+                PluginDiagnosticsIssue::Incompatible => "incompatible",
+            };
+            format!(
+                "Plugin diagnostics\n  issue: {label}\n  detail: {detail}\n  native diagnosis: continues\n"
+            )
+        }
+    }
+}

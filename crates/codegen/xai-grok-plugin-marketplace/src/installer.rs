@@ -4,14 +4,18 @@
 //! Adds marketplace provenance to the installed repo record.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+use xai_grok_agent::plugins::agent_backend::{BackendTarget, HostPlatform};
 use xai_grok_agent::plugins::git_install::{self, InstallSource};
 use xai_grok_agent::plugins::install_registry::{
     InstallError, InstallKind, InstallRegistry, InstalledRepo, MarketplaceProvenance, RepoPlugin,
 };
 use xai_grok_agent::plugins::manifest::{ManifestLoadResult, load_manifest, name_from_dirname};
 
+use crate::artifact::{
+    self, AcquireError, AcquisitionRequest, EgressGrant, SignatureTrust, StagedArtifact,
+};
 use crate::types::{MarketplaceEntry, MarketplaceRelativePath};
 
 /// Result of a marketplace install attempt.
@@ -717,6 +721,47 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
         } else {
             std::fs::copy(&src_path, &dst_path)?;
         }
+    }
+    Ok(())
+}
+
+/// Stage-only native backend artifact (no registry promote — Task 18).
+pub fn stage_native_backend_artifact(
+    req: &AcquisitionRequest,
+    egress: &EgressGrant,
+    trust: &SignatureTrust,
+    staging_root: &Path,
+) -> Result<StagedArtifact, AcquireError> {
+    artifact::acquire_and_stage(req, egress, trust, staging_root)
+}
+
+/// Select one host target then stage from local path or egress-authorized HTTPS.
+pub fn acquire_selected_target(
+    plugin_id: &str,
+    version: &str,
+    targets: &[BackendTarget],
+    host: &HostPlatform,
+    local_archive: Option<PathBuf>,
+    local_signature: Option<PathBuf>,
+    egress: &EgressGrant,
+    trust: &SignatureTrust,
+    staging_root: &Path,
+) -> Result<StagedArtifact, AcquireError> {
+    let target = artifact::select_exact_target(targets, host)?.clone();
+    let req = AcquisitionRequest {
+        plugin_id: plugin_id.into(),
+        version: version.into(),
+        target,
+        local_archive,
+        local_signature,
+    };
+    stage_native_backend_artifact(&req, egress, trust, staging_root)
+}
+
+/// Delete an abandoned staging root after descriptor identity checks by the caller.
+pub fn discard_staging(staging_root: &Path) -> Result<(), AcquireError> {
+    if staging_root.exists() {
+        std::fs::remove_dir_all(staging_root)?;
     }
     Ok(())
 }

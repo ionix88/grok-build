@@ -1,0 +1,51 @@
+name: host-release
+
+# Independent Orca host packaging for darwin-aarch64 and linux-amd64.
+# Fixture signatures never satisfy public promotion.
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "host-v*"
+
+permissions:
+  contents: read
+
+jobs:
+  package-host:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: rustc --version && cargo --version
+      - name: Build orca (linux host runner)
+        run: cargo build -p xai-grok-pager-bin --bin orca --locked
+      - name: Package host artifact set
+        run: |
+          OUT="${RUNNER_TEMP}/host-artifacts"
+          mkdir -p "${OUT}"
+          bash scripts/ci/host-artifact-set.sh build \
+            --out "${OUT}" \
+            --version "${GITHUB_REF_NAME:-0.0.0-ci}" \
+            --orca-bin target/debug/orca
+          bash scripts/ci/host-artifact-set.sh validate --manifest "${OUT}/host-artifact-set.json"
+      - name: Verify host (evidence)
+        run: |
+          OUT="${RUNNER_TEMP}/host-artifacts"
+          RUN="${RUNNER_TEMP}/verify-host"
+          mkdir -p "${RUN}"
+          bash scripts/ci/verify-host.sh \
+            --result-schema host-artifact-set/v1 \
+            --host-artifact-set "${OUT}/host-artifact-set.json" \
+            --target linux-amd64 \
+            --out "${RUN}"
+          test "$(python3 -c 'import json;print(json.load(open("'"${RUN}"'/result.json"))["schema"])')" = "HostArtifactSetResultV1"
+          ! grep -E 'pluginArtifact|goOrcaCommit' "${RUN}/result.json"
+      - name: Promotion gate
+        run: |
+          # Production keys are not in source. Missing key → EXTERNAL_REQUIRED.
+          if [[ -z "${ORCA_RELEASE_SIGNING_KEY:-}" ]]; then
+            echo "EXTERNAL_REQUIRED(signing-key) — unsigned candidate retained; no public promotion"
+          fi

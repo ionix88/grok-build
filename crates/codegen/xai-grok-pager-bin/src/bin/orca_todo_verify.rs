@@ -49,7 +49,7 @@ fn run(args: Vec<String>) -> Result<u8, String> {
         serde_json::from_slice(&record_raw).map_err(|e| format!("parse record: {e}"))?;
     let status = record.get("status").and_then(|v| v.as_str()).unwrap_or("");
     if status == "frozen-record"
-        && !matches!(cli.todo, 2 | 3 | 4 | 5 | 6 | 7 | 10 | 11 | 12 | 13 | 14)
+        && !matches!(cli.todo, 2 | 3 | 4 | 5 | 6 | 7 | 10 | 11 | 12 | 13 | 14 | 55)
     {
         return write_frozen_only(&cli, &root, &record_raw, &record);
     }
@@ -78,6 +78,8 @@ fn run(args: Vec<String>) -> Result<u8, String> {
         (14, Mode::Failure) => run_todo14_failure(&cli, &root, &record_raw, &record),
         (16, Mode::Happy) => run_todo16_happy(&cli, &root, &record_raw, &record),
         (16, Mode::Failure) => run_todo16_failure(&cli, &root, &record_raw, &record),
+        (55, Mode::Happy) => run_todo55_happy(&cli, &root, &record_raw, &record),
+        (55, Mode::Failure) => run_todo55_failure(&cli, &root, &record_raw, &record),
         (n, _) => Err(format!("todo {n} has no live runner yet")),
     }
 }
@@ -6378,6 +6380,511 @@ fn run_todo16_failure(
     })
 }
 
+
+fn run_todo55_happy(
+    cli: &Cli,
+    root: &Path,
+    record_raw: &[u8],
+    _record: &serde_json::Value,
+) -> Result<u8, String> {
+    let mut cmds = Vec::new();
+    let mut asserts = Vec::new();
+    let owned = [
+        root.join("docs/FORK_DELTA.md"),
+        root.join("docs/GROK_SOURCE_SYNC.md"),
+        root.join("scripts/ci/verify-host.sh"),
+        root.join("scripts/ci/host-artifact-set.sh"),
+        root.join(".github/workflows/fork-sync.yml"),
+        root.join(".github/workflows/host-release.yml"),
+        root.join("packaging/host-manifest.json"),
+        root.join("crates/codegen/xai-grok-pager-bin/tests/host_package.rs"),
+        root.join("crates/codegen/xai-grok-pager-bin/tests/native_only.rs"),
+        root.join("crates/codegen/xai-grok-pager-bin/tests/install_update_rollback.rs"),
+        root.join("crates/codegen/xai-grok-pager-bin/src/host_release/mod.rs"),
+        root.join("crates/codegen/xai-grok-pager/src/doctor_cmd/mod.rs"),
+    ];
+    if !owned.iter().all(|p| p.is_file()) {
+        asserts.push(assert_row("owned_paths", "FAIL", "task-55 owned path missing"));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+    asserts.push(assert_row(
+        "owned_paths",
+        "PASS",
+        "docs/scripts/workflows/manifest/tests/host_release/doctor",
+    ));
+
+    let fork = fs::read_to_string(root.join("docs/FORK_DELTA.md")).map_err(|e| e.to_string())?;
+    let sync = fs::read_to_string(root.join("docs/GROK_SOURCE_SYNC.md")).map_err(|e| e.to_string())?;
+    if fork.contains("SourceSyncReportV1") && sync.contains("reportDigest") {
+        asserts.push(assert_row("source_sync_docs", "PASS", "fork + source-sync docs"));
+    } else {
+        asserts.push(assert_row("source_sync_docs", "FAIL", "docs incomplete"));
+    }
+
+    let hr = fs::read_to_string(root.join("crates/codegen/xai-grok-pager-bin/src/host_release/artifact_set.rs"))
+        .map_err(|e| e.to_string())?;
+    if hr.contains("empty_shard_aggregate") && hr.contains("expected_shard_ids") {
+        asserts.push(assert_row(
+            "empty_shard_aggregate",
+            "PASS",
+            "empty Orca shard aggregate",
+        ));
+    } else {
+        asserts.push(assert_row("empty_shard_aggregate", "FAIL", "missing empty shard"));
+    }
+
+    let Some(bin) = resolve_orca_bin(root) else {
+        asserts.push(assert_row("host_artifact_set_build", "FAIL", "orca binary missing"));
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    };
+
+    let tmp = env::temp_dir().join(format!(
+        "orca-qa55-happy-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    let arts = tmp.join("artifacts");
+    fs::create_dir_all(&arts).map_err(|e| e.to_string())?;
+    let has = root.join("scripts/ci/host-artifact-set.sh");
+    let build = Command::new("bash")
+        .arg(&has)
+        .args([
+            "build",
+            "--out",
+            arts.to_str().unwrap_or(""),
+            "--version",
+            "0.0.0-test-host",
+            "--orca-bin",
+            bin.to_str().unwrap_or(""),
+        ])
+        .current_dir(root)
+        .env_remove("GO_ORCA_ROOT")
+        .output()
+        .map_err(|e| e.to_string())?;
+    cmds.push(cmd_row(
+        &["host-artifact-set.sh", "build"],
+        root,
+        build.status.code().unwrap_or(1),
+        &String::from_utf8_lossy(&build.stdout),
+        &String::from_utf8_lossy(&build.stderr),
+    ));
+    let man = arts.join("host-artifact-set.json");
+    if build.status.success() && man.is_file() {
+        asserts.push(assert_row(
+            "host_artifact_set_build",
+            "PASS",
+            "HostArtifactSetV1 written",
+        ));
+    } else {
+        asserts.push(assert_row(
+            "host_artifact_set_build",
+            "FAIL",
+            &format!(
+                "build exit={} err={}",
+                build.status.code().unwrap_or(1),
+                String::from_utf8_lossy(&build.stderr)
+            ),
+        ));
+        let _ = fs::remove_dir_all(&tmp);
+        return finish(FinishInput {
+            cli,
+            root,
+            record_raw,
+            cmds,
+            asserts,
+            status: "REJECTED",
+            assertion_ids: &[],
+        });
+    }
+
+    let arts2 = tmp.join("artifacts2");
+    fs::create_dir_all(&arts2).map_err(|e| e.to_string())?;
+    let build2 = Command::new("bash")
+        .arg(&has)
+        .args([
+            "build",
+            "--out",
+            arts2.to_str().unwrap_or(""),
+            "--version",
+            "0.0.0-test-host",
+            "--orca-bin",
+            bin.to_str().unwrap_or(""),
+        ])
+        .current_dir(root)
+        .env_remove("GO_ORCA_ROOT")
+        .output()
+        .map_err(|e| e.to_string())?;
+    cmds.push(cmd_row(
+        &["host-artifact-set.sh", "build", "second"],
+        root,
+        build2.status.code().unwrap_or(1),
+        "",
+        &String::from_utf8_lossy(&build2.stderr),
+    ));
+    let a = arts.join("orca-0.0.0-test-host-darwin-aarch64.tar.gz");
+    let b = arts2.join("orca-0.0.0-test-host-darwin-aarch64.tar.gz");
+    let equal = build2.status.success()
+        && a.is_file()
+        && b.is_file()
+        && fs::read(&a).ok() == fs::read(&b).ok();
+    if equal {
+        asserts.push(assert_row(
+            "dual_build_byte_equal",
+            "PASS",
+            "two clean builds byte-equal",
+        ));
+    } else {
+        asserts.push(assert_row(
+            "dual_build_byte_equal",
+            "FAIL",
+            "archive bytes drifted",
+        ));
+    }
+
+    let path_out = Command::new("bash")
+        .arg(&has)
+        .args([
+            "path",
+            "--manifest",
+            man.to_str().unwrap_or(""),
+            "--target",
+            "darwin-aarch64",
+        ])
+        .output()
+        .map_err(|e| e.to_string())?;
+    cmds.push(cmd_row(
+        &["host-artifact-set.sh", "path"],
+        root,
+        path_out.status.code().unwrap_or(1),
+        &String::from_utf8_lossy(&path_out.stdout),
+        &String::from_utf8_lossy(&path_out.stderr),
+    ));
+    let resolved = String::from_utf8_lossy(&path_out.stdout).trim().to_string();
+    if path_out.status.success() && Path::new(&resolved).is_file() && resolved.starts_with('/') {
+        asserts.push(assert_row("resolver_path", "PASS", &resolved));
+    } else {
+        asserts.push(assert_row(
+            "resolver_path",
+            "FAIL",
+            &format!("stdout={resolved}"),
+        ));
+    }
+
+    let runner = tmp.join("runner");
+    fs::create_dir_all(&runner).map_err(|e| e.to_string())?;
+    let verify = Command::new("bash")
+        .arg(root.join("scripts/ci/verify-host.sh"))
+        .args([
+            "--result-schema",
+            "host-artifact-set/v1",
+            "--host-artifact-set",
+            man.to_str().unwrap_or(""),
+            "--target",
+            "darwin-aarch64",
+            "--artifact",
+            &resolved,
+            "--out",
+            runner.to_str().unwrap_or(""),
+        ])
+        .env("ORCA_BIN", &bin)
+        .env_remove("GO_ORCA_ROOT")
+        .output()
+        .map_err(|e| e.to_string())?;
+    cmds.push(cmd_row(
+        &["verify-host.sh"],
+        root,
+        verify.status.code().unwrap_or(1),
+        &String::from_utf8_lossy(&verify.stdout),
+        &String::from_utf8_lossy(&verify.stderr),
+    ));
+    let result_raw = fs::read_to_string(runner.join("result.json")).unwrap_or_default();
+    if verify.status.success()
+        && result_raw.contains("HostArtifactSetResultV1")
+        && result_raw.contains("APPROVED")
+    {
+        asserts.push(assert_row("verify_host", "PASS", "HostArtifactSetResultV1 APPROVED"));
+    } else {
+        asserts.push(assert_row(
+            "verify_host",
+            "FAIL",
+            &format!(
+                "exit={} result={}",
+                verify.status.code().unwrap_or(1),
+                result_raw.chars().take(200).collect::<String>()
+            ),
+        ));
+    }
+
+    let man_raw = fs::read_to_string(&man).unwrap_or_default();
+    if !man_raw.contains("pluginArtifact")
+        && !man_raw.contains("goOrcaCommit")
+        && !result_raw.contains("pluginArtifact")
+        && !result_raw.contains("goOrcaCommit")
+    {
+        asserts.push(assert_row(
+            "host_only_identity",
+            "PASS",
+            "no plugin/go identity fields",
+        ));
+    } else {
+        asserts.push(assert_row(
+            "host_only_identity",
+            "FAIL",
+            "plugin or go field present",
+        ));
+    }
+
+    let cargo_before = sha256_hex(
+        &fs::read(root.join("Cargo.toml")).map_err(|e| e.to_string())?,
+    );
+    if man_raw.contains(&cargo_before) || man_raw.contains("rootCargoSha256") {
+        asserts.push(assert_row(
+            "root_cargo_unchanged",
+            "PASS",
+            "root cargo digest bound; packaging did not rewrite Cargo.toml",
+        ));
+    } else {
+        asserts.push(assert_row(
+            "root_cargo_unchanged",
+            "FAIL",
+            "root cargo not bound",
+        ));
+    }
+
+    let diag = root.join("release/contracts/plugin-diagnostics-v1");
+    if diag.join("schema.json").is_file() && diag.join("healthy.json").is_file() {
+        asserts.push(assert_row(
+            "diagnostics_orca_copy",
+            "PASS",
+            "Orca released diagnostics fixtures",
+        ));
+    } else {
+        asserts.push(assert_row(
+            "diagnostics_orca_copy",
+            "FAIL",
+            "diagnostics fixtures missing",
+        ));
+    }
+
+    let doctor = fs::read_to_string(root.join("crates/codegen/xai-grok-pager/src/doctor_cmd/mod.rs"))
+        .map_err(|e| e.to_string())?;
+    if doctor.contains("validate_plugin_diagnostics_fixture")
+        && doctor.contains("mod human;")
+        && doctor.contains("mod json;")
+        && doctor.contains("#[cfg(test)]\nmod tests")
+    {
+        asserts.push(assert_row(
+            "native_only_doctor",
+            "PASS",
+            "doctor plugin-diag renderer; mod decls preserved",
+        ));
+    } else {
+        asserts.push(assert_row(
+            "native_only_doctor",
+            "FAIL",
+            "doctor renderer incomplete or mod decls drifted",
+        ));
+    }
+
+    let _ = fs::remove_dir_all(&tmp);
+    let failed = asserts
+        .iter()
+        .any(|a| a.get("status").and_then(|s| s.as_str()) == Some("FAIL"));
+    finish(FinishInput {
+        cli,
+        root,
+        record_raw,
+        cmds,
+        asserts,
+        status: if failed { "REJECTED" } else { "APPROVED" },
+        assertion_ids: if failed { &[] } else { &["T55-HAPPY"] },
+    })
+}
+
+fn run_todo55_failure(
+    cli: &Cli,
+    root: &Path,
+    record_raw: &[u8],
+    _record: &serde_json::Value,
+) -> Result<u8, String> {
+    let mut cmds = Vec::new();
+    let mut asserts = Vec::new();
+    let verify_sh = fs::read_to_string(root.join("scripts/ci/verify-host.sh")).map_err(|e| e.to_string())?;
+    let has_sh = fs::read_to_string(root.join("scripts/ci/host-artifact-set.sh")).map_err(|e| e.to_string())?;
+    let iso = fs::read_to_string(root.join("crates/codegen/xai-grok-pager-bin/src/host_release/isolation.rs"))
+        .map_err(|e| e.to_string())?;
+    let sync = fs::read_to_string(root.join("crates/codegen/xai-grok-pager-bin/src/host_release/source_sync.rs"))
+        .map_err(|e| e.to_string())?;
+    let art = fs::read_to_string(root.join("crates/codegen/xai-grok-pager-bin/src/host_release/artifact_set.rs"))
+        .map_err(|e| e.to_string())?;
+    let doctor = fs::read_to_string(root.join("crates/codegen/xai-grok-pager/src/doctor_cmd/mod.rs"))
+        .map_err(|e| e.to_string())?;
+
+    let guards = [
+        (
+            "source_sync_conflict",
+            sync.contains("SourceSyncStatus::Conflict")
+                && sync.contains("require_clean")
+                && verify_sh.contains("SourceSyncConflict"),
+        ),
+        (
+            "archive_signature_drift",
+            art.contains("ArchiveDrift")
+                && has_sh.contains("archive digest drift")
+                && verify_sh.contains("HostArtifactDrift"),
+        ),
+        (
+            "target_ambiguity",
+            art.contains("AmbiguousTarget")
+                && has_sh.contains("ambiguous target")
+                && verify_sh.contains("AmbiguousHostTarget"),
+        ),
+        (
+            "go_embedding_path",
+            iso.contains("GoInput")
+                && iso.contains("deny_go_inputs")
+                && iso.contains("\"goOrcaCommit\"")
+                && verify_sh.contains("EmbeddedGoArtifact"),
+        ),
+        (
+            "combined_result",
+            iso.contains("ArtifactVerificationResultV1")
+                && iso.contains("ModeMismatch")
+                && verify_sh.contains("CombinedResultEnvelope"),
+        ),
+        (
+            "plugin_required_startup",
+            verify_sh.contains("PluginRequired")
+                && doctor.contains("enum PluginDiagnosticsView")
+                && doctor.contains("Absent")
+                && !has_sh.contains("require_plugin"),
+        ),
+        (
+            "generated_cargo_drift",
+            sync.contains("GeneratedCargoDrift")
+                && sync.contains("RootCargoMutation")
+                && verify_sh.contains("GeneratedCargoDrift"),
+        ),
+        (
+            "unsupported_promotion",
+            art.contains("UnsupportedPromotion")
+                && has_sh.contains("unsupported promotion")
+                && art.contains("promotion_eligible")
+                && verify_sh.contains("UnsignedPromotion"),
+        ),
+    ];
+
+    let tmp = env::temp_dir().join(format!(
+        "orca-qa55-fail-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
+    let injects = [
+        "SourceSyncConflict",
+        "HostArtifactDrift",
+        "AmbiguousHostTarget",
+        "EmbeddedGoArtifact",
+        "CombinedResultEnvelope",
+        "PluginRequired",
+        "GeneratedCargoDrift",
+        "UnsignedPromotion",
+    ];
+    let mut runtime_ok = true;
+    for inj in injects {
+        let out = tmp.join(inj);
+        let _ = fs::remove_dir_all(&out);
+        fs::create_dir_all(&out).map_err(|e| e.to_string())?;
+        let o = Command::new("bash")
+            .arg(root.join("scripts/ci/verify-host.sh"))
+            .args([
+                "--result-schema",
+                "host-artifact-set/v1",
+                "--out",
+                out.to_str().unwrap_or(""),
+                "--inject",
+                inj,
+            ])
+            .output()
+            .map_err(|e| e.to_string())?;
+        cmds.push(cmd_row(
+            &["verify-host.sh", "--inject", inj],
+            root,
+            o.status.code().unwrap_or(1),
+            &String::from_utf8_lossy(&o.stdout),
+            &String::from_utf8_lossy(&o.stderr),
+        ));
+        if o.status.code() != Some(2) {
+            runtime_ok = false;
+        }
+    }
+    let _ = fs::remove_dir_all(&tmp);
+
+    let mut all_ok = runtime_ok;
+    for (id, ok) in guards {
+        if ok {
+            asserts.push(assert_row(id, "PASS", "fail-closed guard present"));
+        } else {
+            asserts.push(assert_row(id, "FAIL", "guard missing"));
+            all_ok = false;
+        }
+    }
+    if runtime_ok {
+        asserts.push(assert_row(
+            "inject_runtime",
+            "PASS",
+            "all injects exit 2",
+        ));
+    } else {
+        asserts.push(assert_row(
+            "inject_runtime",
+            "FAIL",
+            "inject exit codes",
+        ));
+    }
+    if all_ok {
+        asserts.push(assert_row(
+            "failure_aggregate",
+            "PASS",
+            "all failure vectors covered",
+        ));
+    }
+    finish(FinishInput {
+        cli,
+        root,
+        record_raw,
+        cmds,
+        asserts,
+        status: if all_ok { "APPROVED" } else { "REJECTED" },
+        assertion_ids: if all_ok {
+            &["T55-FAILURE-GUARDS"]
+        } else {
+            &[]
+        },
+    })
+}
 
 fn resolve_orca_bin(root: &Path) -> Option<PathBuf> {
     if let Ok(p) = env::var("ORCA_BIN") {

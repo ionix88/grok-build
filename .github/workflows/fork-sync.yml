@@ -1,0 +1,43 @@
+name: fork-sync
+
+# Deterministic Orca source-sync replay. Never auto-merges or promotes.
+on:
+  workflow_dispatch:
+    inputs:
+      pin_commit:
+        description: Upstream pin commit
+        required: true
+        type: string
+  push:
+    paths:
+      - "docs/FORK_DELTA.md"
+      - "docs/GROK_SOURCE_SYNC.md"
+      - "SOURCE_REV"
+      - "scripts/ci/**"
+
+permissions:
+  contents: read
+
+jobs:
+  source-sync-report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require SOURCE_REV and fork docs
+        run: |
+          test -f SOURCE_REV
+          test -f docs/FORK_DELTA.md
+          test -f docs/GROK_SOURCE_SYNC.md
+      - name: Root Cargo independence guard
+        run: |
+          # Packaging must not rewrite root Cargo.toml in CI.
+          shasum -a 256 Cargo.toml | tee /tmp/root-cargo.sha
+      - name: Empty Orca shard aggregate note
+        run: |
+          printf 'Task 55 records empty Orca shard aggregate (no parity shards).\n'
+      - name: Deny Go inputs
+        run: |
+          if [[ -n "${GO_ORCA_ROOT:-}" ]]; then
+            echo "GO_ORCA_ROOT must be unset for host fork-sync" >&2
+            exit 2
+          fi

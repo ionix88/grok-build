@@ -3,25 +3,31 @@
   "todo": 17,
   "role": "orca",
   "title": "Verify native backend artifacts on install",
-  "status": "frozen-record",
+  "status": "live",
   "happy": {
     "assertionId": "T17-HAPPY",
-    "action": {
-      "kind": "deferred",
-      "subject": "task-17"
-    },
+    "action": { "kind": "artifact-acquire-stage", "subject": "task-17" },
     "checks": [
-      "owned_by_later_task"
+      "owned_paths",
+      "stage_only_api",
+      "crate_deps",
+      "valid_fixture_stage",
+      "no_promotion"
     ]
   },
   "failure": {
     "assertionId": "T17-FAILURE-GUARDS",
     "fixtures": [
-      {
-        "id": "deferred",
-        "expect": "product_validation_deferred"
-      }
+      { "id": "traversal", "expect": "typed_refusal" },
+      { "id": "duplicate_case_collision", "expect": "typed_refusal" },
+      { "id": "link_device", "expect": "typed_refusal" },
+      { "id": "gzip_tar_drift", "expect": "typed_refusal" },
+      { "id": "bomb", "expect": "typed_refusal" },
+      { "id": "redirect", "expect": "typed_refusal" },
+      { "id": "timeout", "expect": "typed_refusal" },
+      { "id": "target_mismatch", "expect": "typed_refusal" },
+      { "id": "executable_role_drift", "expect": "typed_refusal_no_staging" }
     ]
   },
-  "note": "Product implementation is Task 17. This record is frozen by Task 2."
+  "note": "Live Task 17 QA: bounded artifact acquisition, R5 expansion, target verification; no promotion."
 }

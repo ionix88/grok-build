@@ -10,8 +10,8 @@ mod stage;
 
 pub use apply::{promote, run_apply_host_update, ApplyError};
 pub use receipt::{
-    HostLayout, HostUpdateReceiptV1, HostUpdateTransactionV1, LastKnownGoodV1, TxnPhase,
-    SIG_ALG_ED25519,
+    sha256_hex, HostLayout, HostUpdateReceiptV1, HostUpdateTransactionV1, LastKnownGoodV1,
+    TxnPhase, ARCHIVE_FORMAT_ID, SIG_ALG_ED25519,
 };
 pub use rollback::{rollback, RollbackError};
 pub use stage::{

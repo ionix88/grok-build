@@ -4,6 +4,7 @@
 //! filesystem fallback), and install integration with the existing
 //! `InstallRegistry` pipeline.
 
+pub mod artifact;
 pub mod catalog;
 pub mod config;
 pub mod error;

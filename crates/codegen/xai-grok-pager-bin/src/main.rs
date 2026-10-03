@@ -5,6 +5,7 @@
     unreachable_code,
     dead_code
 )]
+mod host_release;
 mod host_update;
 mod import_grok;
 #[cfg(all(feature = "jemalloc", unix))]

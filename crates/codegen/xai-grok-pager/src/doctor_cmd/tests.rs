@@ -1,4 +1,5 @@
 use super::*;
+use std::path::Path;
 use crate::clipboard::{
     ClipboardDelivery, ClipboardRoute, NativeClipboardPreflight, Osc52Capability,
 };
@@ -1042,4 +1043,57 @@ fn output_writer_errors_propagate() {
 
     assert!(write_report(&healthy_report(), false, &mut BrokenWriter).is_err());
     assert!(write_report(&healthy_report(), true, &mut BrokenWriter).is_err());
+}
+
+#[test]
+fn plugin_diagnostics_healthy_fixture_accepted() {
+    let root = find_orca_root_from(Path::new(env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let (raw, view) = load_released_diagnostics_fixture(&root, "healthy.json").unwrap();
+    assert!(!raw.is_empty());
+    match view {
+        PluginDiagnosticsView::Accepted {
+            status,
+            backend_id,
+        } => {
+            assert_eq!(status, "healthy");
+            assert_eq!(backend_id, "go-orca");
+        }
+        other => panic!("expected Accepted, got {other:?}"),
+    }
+    let section = format_plugin_diagnostics_section(&view);
+    assert!(section.contains("authority: none"));
+    assert!(section.contains("go-orca"));
+}
+
+#[test]
+fn plugin_diagnostics_unauthorized_field_reported() {
+    let raw = br#"{"status":"healthy","backendId":"x","authority":true}"#;
+    let view = validate_plugin_diagnostics_fixture(raw);
+    assert!(matches!(
+        view,
+        PluginDiagnosticsView::Reported {
+            kind: PluginDiagnosticsIssue::UnauthorizedField,
+            ..
+        }
+    ));
+    let section = format_plugin_diagnostics_section(&view);
+    assert!(section.contains("native diagnosis: continues"));
+}
+
+#[test]
+fn plugin_diagnostics_absent_native_only() {
+    let section = format_plugin_diagnostics_section(&PluginDiagnosticsView::Absent);
+    assert!(section.contains("native-only"));
+}
+
+#[test]
+fn plugin_diagnostics_malformed_does_not_panic() {
+    let view = validate_plugin_diagnostics_fixture(b"not-json");
+    assert!(matches!(
+        view,
+        PluginDiagnosticsView::Reported {
+            kind: PluginDiagnosticsIssue::Malformed,
+            ..
+        }
+    ));
 }

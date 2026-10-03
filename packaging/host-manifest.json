@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "schema": "HostPackagingManifestTemplateV1",
+  "product": "orca",
+  "formatId": "tar-gzip-rfc1952-ustar-v1",
+  "advertisedTargets": [
+    "darwin-aarch64",
+    "linux-amd64"
+  ],
+  "archiveLayout": {
+    "entries": [
+      {
+        "relativePath": "host-manifest.json",
+        "modeOctal": "0644",
+        "role": "manifest"
+      },
+      {
+        "relativePath": "orca",
+        "modeOctal": "0755",
+        "role": "hostExecutable"
+      }
+    ],
+    "gzip": {
+      "level": 9,
+      "flg": 0,
+      "mtime": 0,
+      "xfl": 2,
+      "os": 255
+    }
+  },
+  "signing": {
+    "algorithm": "ed25519-detached-v1",
+    "keyIdFormat": "sha256:<public-key-bytes>",
+    "fixtureKeysPromotionEligible": false,
+    "missingProductionKey": "EXTERNAL_REQUIRED(signing-key)"
+  },
+  "resultSchema": "HostArtifactSetResultV1",
+  "setSchema": "HostArtifactSetV1",
+  "shardAggregate": {
+    "role": "orca",
+    "expectedShardIds": [],
+    "entries": [],
+    "note": "Task 55 records an explicitly empty Orca shard aggregate"
+  },
+  "isolation": {
+    "deny": [
+      "goOrcaRoot",
+      "goOrcaSource",
+      "goOrcaArtifacts",
+      "task53Outputs",
+      "pluginArtifactIdentity",
+      "combinedArtifactVerificationResult"
+    ],
+    "diagnosticsCopy": "release/contracts/plugin-diagnostics-v1"
+  },
+  "scripts": {
+    "artifactSet": "scripts/ci/host-artifact-set.sh",
+    "verifyHost": "scripts/ci/verify-host.sh"
+  }
+}
